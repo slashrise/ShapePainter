@@ -4,7 +4,7 @@ import math
 from typing import Union
 from PyQt6.QtWidgets import QWidget
 from PyQt6.QtGui import QPainter, QPen, QColor, QBrush, QPolygon, QPolygonF, QPainterPath
-from PyQt6.QtCore import Qt, QRect, QPoint, QPointF, QLineF
+from PyQt6.QtCore import Qt, QRect, QPoint, QPointF, QLineF, QRectF
 
 from shapes import (Text, Square, Ellipse, RoundedRectangle, Polygon, Circle, Rectangle,
                     Point, Line, Arc, Polyline, ShapeGroup, Arrow)
@@ -39,11 +39,33 @@ class CanvasRenderer:
 
     @staticmethod
     def _draw_single_shape(painter: QPainter, shape: AnyShape):
+        painter.save()
+
+        bbox = shape.get_bounding_box()
+        center = bbox.center()
+
+        painter.translate(center)
+        
+        # --- 这是需要修改的地方 ---
+        # 旧的错误顺序:
+        # painter.rotate(shape.angle)
+        # painter.scale(shape.scale_x, shape.scale_y)
+        
+        # 新的正确顺序:
+        painter.scale(shape.scale_x, shape.scale_y)
+        painter.rotate(shape.angle)
+        # --- 修改结束 ---
+        
+        painter.translate(-center)
+
+
+        # --- 以下是几乎不变的原始绘制逻辑 ---
         if isinstance(shape, Text):
             painter.setFont(shape.font)
             pen = QPen(shape.color)
             painter.setPen(pen)
-            painter.drawText(shape.get_bounding_box(), Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignTop | Qt.TextFlag.TextWordWrap, shape.text)
+            # 注意：drawText 需要 QRectF 以支持浮点精度
+            painter.drawText(QRectF(shape.get_bounding_box()), Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignTop | Qt.TextFlag.TextWordWrap, shape.text)
             if shape.has_border:
                 pen = QPen(shape.border_color, 1)
                 painter.setPen(pen)
@@ -79,6 +101,8 @@ class CanvasRenderer:
                 painter.drawRoundedRect(shape.get_bounding_box(), 20, 20)
             elif isinstance(shape, Polygon) and len(shape.points) >= 3:
                 painter.drawPolygon(QPolygon(shape.points))
+
+        painter.restore() # 恢复 painter 到 save() 之前的状态
 
     @staticmethod
     def draw_arrow(painter: QPainter, p1: QPoint, p2: QPoint, color: QColor, width: int):

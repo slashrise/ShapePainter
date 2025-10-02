@@ -1,33 +1,25 @@
-# --- START OF FILE tools.py ---
+# --- START OF FILE tools.py (Fully Corrected) ---
 
 import math
-from PyQt6.QtWidgets import QApplication, QTextEdit
-from PyQt6.QtGui import QPainter, QPen, QColor, QBrush, QPolygon, QPainterPath, QCursor
-from PyQt6.QtCore import Qt, QPoint, QRect, QPointF, QLineF
+from PyQt6.QtWidgets import QApplication
+from PyQt6.QtGui import QPainter, QPen, QColor, QBrush, QPolygon, QPainterPath, QCursor, QTransform, QFont
+from PyQt6.QtCore import Qt, QPoint, QRect, QPointF
 
 from shapes import *
 from commands import (AddShapeCommand, RemoveShapesCommand, MoveShapesCommand,
-                      ScaleCommand, ChangePropertiesCommand)
+                      ScaleCommand, ChangePropertiesCommand, RotateCommand, FlipCommand, ModifyNodeCommand)
 
 class Tool:
     def __init__(self, canvas):
         self.canvas = canvas
-    def mousePressEvent(self, event):
-        pass
-    def mouseMoveEvent(self, event):
-        pass
-    def mouseReleaseEvent(self, event):
-        pass
-    def mouseDoubleClickEvent(self, event):
-        pass
-    def keyPressEvent(self, event):
-        pass
-    def activate(self):
-        pass
-    def deactivate(self):
-        self.canvas.update()
-    def paint(self, painter):
-        pass
+    def mousePressEvent(self, event): pass
+    def mouseMoveEvent(self, event): pass
+    def mouseReleaseEvent(self, event): pass
+    def mouseDoubleClickEvent(self, event): pass
+    def keyPressEvent(self, event): pass
+    def activate(self): pass
+    def deactivate(self): self.canvas.update()
+    def paint(self, painter): pass
 
 class SelectTool(Tool):
     def __init__(self, canvas):
@@ -38,11 +30,12 @@ class SelectTool(Tool):
         self.original_shapes_for_action = []
         self.dragging = False
         self.scaling = False
+        self.rotating = False
         self.scale_corner = None
         self.scale_center = None
         self.node_editing_active = False
         self.selected_node_index = -1
-        self.original_shape_for_node_edit = None
+        self.original_node_position = None
         
     def activate(self):
         self.deactivate()
@@ -55,24 +48,40 @@ class SelectTool(Tool):
         self.original_shapes_for_action.clear()
         self.dragging = False
         self.scaling = False
+        self.rotating = False
         self.node_editing_active = False
         self.selected_node_index = -1
+        self.original_node_position = None
         self.canvas.setCursor(QCursor(Qt.CursorShape.ArrowCursor))
         super().deactivate()
+
+    def _get_transform_for_shape(self, shape):
+        original_bbox = shape.get_bounding_box()
+        center = original_bbox.center()
         
+        transform = QTransform()
+        transform.translate(center.x(), center.y())
+        transform.scale(shape.scale_x, shape.scale_y)
+        transform.rotate(shape.angle)
+        transform.translate(-center.x(), -center.y())
+        
+        inverted_transform, _ = transform.inverted()
+        return transform, inverted_transform
+
     def mousePressEvent(self, event):
-        if event.button() != Qt.MouseButton.LeftButton:
-            return
+        if event.button() != Qt.MouseButton.LeftButton: return
         self.original_shapes_for_action.clear()
-        self.dragging = False
-        self.scaling = False
+        self.dragging, self.scaling, self.rotating = False, False, False
+
         if self.node_editing_active:
             self._handle_node_press(event)
             return
-        on_corner = self._is_on_corner(event.pos())
-        if on_corner and self.canvas.selected_shapes:
-            if any(self.canvas._get_layer_for_shape(s) is not None and not self.canvas._get_layer_for_shape(s).is_locked for s in self.canvas.selected_shapes):
-                self._handle_scale_start(event, on_corner)
+
+        handle_type = self._get_handle_type_at(event.pos())
+        if handle_type and self.canvas.selected_shapes:
+            if any(not self.canvas._get_layer_for_shape(s).is_locked for s in self.canvas.selected_shapes):
+                if handle_type == "rotate": self._handle_rotate_start(event)
+                else: self._handle_scale_start(event, handle_type)
         else:
             self._handle_select_press(event)
 
@@ -80,35 +89,27 @@ class SelectTool(Tool):
         if not (event.buttons() & Qt.MouseButton.LeftButton):
             self._update_cursor(event.pos())
             return
-        if self.node_editing_active and self.selected_node_index != -1:
-            self._handle_node_move(event)
-            return
-        if self.scaling:
-            self._handle_scale_move(event)
-            return
-        if self.dragging:
-            self._handle_drag_move(event)
-            return
-        if self.is_multiselecting:
+        
+        if self.rotating: self._handle_rotate_move(event)
+        elif self.node_editing_active and self.selected_node_index != -1: self._handle_node_move(event)
+        elif self.scaling: self._handle_scale_move(event)
+        elif self.dragging: self._handle_drag_move(event)
+        elif self.is_multiselecting:
             self.selection_rect.setBottomRight(event.pos())
             self.canvas.update()
-
+    
     def mouseReleaseEvent(self, event):
-        if event.button() != Qt.MouseButton.LeftButton:
-            return
-        if self.node_editing_active:
-            self._handle_node_release(event)
-            return
-        if self.scaling:
-            self._handle_scale_finish(event)
-        elif self.dragging:
-            self._handle_drag_finish(event)
-        elif self.is_multiselecting:
-            self._handle_multiselect_finish()
+        if event.button() != Qt.MouseButton.LeftButton: return
+        
+        if self.rotating: self._handle_rotate_finish(event)
+        elif self.node_editing_active: self._handle_node_release(event)
+        elif self.scaling: self._handle_scale_finish(event)
+        elif self.dragging: self._handle_drag_finish(event)
+        elif self.is_multiselecting: self._handle_multiselect_finish()
+
         self.action_start_position = None
         self.original_shapes_for_action.clear()
-        self.dragging = False
-        self.scaling = False
+        self.dragging, self.scaling, self.rotating = False, False, False
         self.is_multiselecting = False
         self.selection_rect = None
         self.canvas.update()
@@ -118,23 +119,16 @@ class SelectTool(Tool):
         is_shift_pressed = modifiers == Qt.KeyboardModifier.ShiftModifier
         shape_clicked, layer_of_shape = self.canvas._get_shape_at(event.pos())
         self.node_editing_active = False
-
         if shape_clicked:
             if layer_of_shape and not layer_of_shape.is_locked:
-                self.action_start_position = event.pos() 
-                if not is_shift_pressed and shape_clicked not in self.canvas.selected_shapes:
-                    self.canvas.selected_shapes.clear()
-                
-                if is_shift_pressed and shape_clicked in self.canvas.selected_shapes:
-                    self.canvas.selected_shapes.remove(shape_clicked)
-                elif shape_clicked not in self.canvas.selected_shapes:
-                    self.canvas.selected_shapes.append(shape_clicked)
-                
+                self.action_start_position = event.pos()
+                if not is_shift_pressed and shape_clicked not in self.canvas.selected_shapes: self.canvas.selected_shapes.clear()
+                if is_shift_pressed and shape_clicked in self.canvas.selected_shapes: self.canvas.selected_shapes.remove(shape_clicked)
+                elif shape_clicked not in self.canvas.selected_shapes: self.canvas.selected_shapes.append(shape_clicked)
                 self.dragging = True
                 self.original_shapes_for_action = [s.clone() for s in self.canvas.selected_shapes]
         else:
-            if not is_shift_pressed:
-                self.canvas.selected_shapes.clear()
+            if not is_shift_pressed: self.canvas.selected_shapes.clear()
             self.is_multiselecting = True
             self.selection_rect = QRect(event.pos(), event.pos())
         self.canvas.update()
@@ -148,16 +142,13 @@ class SelectTool(Tool):
 
     def _handle_drag_finish(self, event):
         total_delta = event.pos() - self.action_start_position
-        for i, original_shape in enumerate(self.original_shapes_for_action):
-            self.canvas.selected_shapes[i].__dict__ = original_shape.__dict__
-        if total_delta.x() != 0 or total_delta.y() != 0:
+        for i, original_shape in enumerate(self.original_shapes_for_action): self.canvas.selected_shapes[i].__dict__ = original_shape.__dict__
+        if total_delta.manhattanLength() > 2:
             command = MoveShapesCommand(self.canvas.selected_shapes, total_delta.x(), total_delta.y())
             self.canvas.execute_command(command)
 
     def _handle_scale_start(self, event, corner_name):
-        self.dragging = False
-        self.scaling = True
-        self.scale_corner = corner_name
+        self.dragging = False; self.scaling = True; self.scale_corner = corner_name
         self.action_start_position = event.pos()
         self.original_shapes_for_action = [s.clone() for s in self.canvas.selected_shapes]
         total_bbox = self.canvas._get_selection_bbox()
@@ -172,8 +163,7 @@ class SelectTool(Tool):
         dist_end_vec = event.pos() - self.scale_center
         dist_start_len = math.sqrt(dist_start_vec.x()**2 + dist_start_vec.y()**2)
         dist_end_len = math.sqrt(dist_end_vec.x()**2 + dist_end_vec.y()**2)
-        if dist_start_len == 0:
-            return
+        if dist_start_len == 0: return
         factor = dist_end_len / dist_start_len
         for i, original_shape in enumerate(self.original_shapes_for_action):
             self.canvas.selected_shapes[i].__dict__ = original_shape.clone().__dict__
@@ -186,138 +176,210 @@ class SelectTool(Tool):
         dist_start_len = math.sqrt(dist_start_vec.x()**2 + dist_start_vec.y()**2)
         dist_end_len = math.sqrt(dist_end_vec.x()**2 + dist_end_vec.y()**2)
         final_factor = dist_end_len / dist_start_len if dist_start_len != 0 else 1.0
-        for i, original_shape in enumerate(self.original_shapes_for_action):
-            self.canvas.selected_shapes[i].__dict__ = original_shape.__dict__
+        for i, original_shape in enumerate(self.original_shapes_for_action): self.canvas.selected_shapes[i].__dict__ = original_shape.__dict__
         if abs(final_factor - 1.0) > 0.001:
             command = ScaleCommand(self.canvas.selected_shapes, final_factor, self.scale_center)
             self.canvas.execute_command(command)
+
+    def _handle_rotate_start(self, event):
+        self.rotating = True
+        self.action_start_position = event.pos()
+        self.original_shapes_for_action = [s.clone() for s in self.canvas.selected_shapes]
+        self.scale_center = self.canvas._get_selection_bbox().center()
+
+    def _handle_rotate_move(self, event):
+        if not self.scale_center: return
+        start_vec = self.action_start_position - self.scale_center
+        current_vec = event.pos() - self.scale_center
+        start_angle = math.atan2(start_vec.y(), start_vec.x())
+        current_angle = math.atan2(current_vec.y(), current_vec.x())
+        angle_delta_rad = current_angle - start_angle
+        angle_delta_deg = math.degrees(angle_delta_rad)
+        for i, original_shape in enumerate(self.original_shapes_for_action):
+            self.canvas.selected_shapes[i].__dict__ = original_shape.clone().__dict__
+            final_angle_delta = angle_delta_deg
+            if self.canvas.selected_shapes[i].scale_x * self.canvas.selected_shapes[i].scale_y < 0: final_angle_delta = -angle_delta_deg
+            self.canvas.selected_shapes[i].rotate(rotation_delta=final_angle_delta)
+        self.canvas.update()
+
+    def _handle_rotate_finish(self, event):
+        if not self.scale_center: return
+        start_vec = self.action_start_position - self.scale_center
+        current_vec = event.pos() - self.scale_center
+        start_angle = math.atan2(start_vec.y(), start_vec.x())
+        current_angle = math.atan2(current_vec.y(), current_vec.x())
+        angle_delta_rad = current_angle - start_angle
+        final_angle_delta_deg = math.degrees(angle_delta_rad)
+
+        # Restore shapes to their original state before issuing the command
+        for i, original_shape in enumerate(self.original_shapes_for_action):
+            self.canvas.selected_shapes[i].__dict__ = original_shape.__dict__
+
+        # Calculate final delta considering the flip state of the original shape
+        if self.original_shapes_for_action:
+            original_shape = self.original_shapes_for_action[0]
+            final_angle_delta = final_angle_delta_deg
+            if original_shape.scale_x * original_shape.scale_y < 0:
+                final_angle_delta = -final_angle_delta_deg
+
+            if abs(final_angle_delta_deg) > 0.1:
+                command = RotateCommand(self.canvas.selected_shapes, rotation_delta=final_angle_delta)
+                self.canvas.execute_command(command)
+
 
     def mouseDoubleClickEvent(self, event):
         if event.button() == Qt.MouseButton.LeftButton:
             shape_clicked, layer_of_shape = self.canvas._get_shape_at(event.pos())
             if shape_clicked and layer_of_shape and not layer_of_shape.is_locked:
                 if not isinstance(shape_clicked, Text) and hasattr(shape_clicked, 'get_nodes') and len(self.canvas.selected_shapes) == 1 and self.canvas.selected_shapes[0] is shape_clicked:
-                    self.node_editing_active = not self.node_editing_active
-                    self.selected_node_index = -1
-                    self.canvas.update()
+                    self.node_editing_active = not self.node_editing_active; self.selected_node_index = -1; self.canvas.update()
 
     def keyPressEvent(self, event):
-        if event.key() == Qt.Key.Key_Backspace and self.canvas.selected_shapes:
-            self.canvas.delete_selected()
+        if event.key() == Qt.Key.Key_Backspace and self.canvas.selected_shapes: self.canvas.delete_selected()
 
     def paint(self, painter):
         if self.is_multiselecting and self.selection_rect:
             pen = QPen(QColor(0, 150, 255), 1, Qt.PenStyle.DashLine)
-            painter.setPen(pen)
-            painter.setBrush(QColor(0, 150, 255, 30))
-            painter.drawRect(self.selection_rect)
-        if self.canvas.selected_shapes:
-            if self.node_editing_active:
+            painter.setPen(pen); painter.setBrush(QColor(0, 150, 255, 30)); painter.drawRect(self.selection_rect)
+        
+        if not self.canvas.selected_shapes: return
+
+        if self.node_editing_active and len(self.canvas.selected_shapes) == 1:
+            shape = self.canvas.selected_shapes[0]
+            transform, _ = self._get_transform_for_shape(shape)
+            painter.setPen(QColor("black"))
+            for i, node_pos in enumerate(shape.get_nodes()):
+                transformed_node_pos = transform.map(node_pos)
+                node_rect = QRect(transformed_node_pos.x() - 4, transformed_node_pos.y() - 4, 8, 8)
+                painter.setBrush(QColor("#0078d7") if i == self.selected_node_index else QColor("white"))
+                painter.drawRect(node_rect)
+        elif not self.node_editing_active:
+            total_bbox_transformed = self.canvas._get_selection_bbox()
+            if total_bbox_transformed.isEmpty(): return
+
+            painter.save()
+            if len(self.canvas.selected_shapes) == 1:
                 shape = self.canvas.selected_shapes[0]
-                painter.setBrush(QColor("white"))
-                painter.setPen(QColor("black"))
-                for i, node in enumerate(shape.get_nodes()):
-                    node_rect = QRect(node.x() - 4, node.y() - 4, 8, 8)
-                    if i == self.selected_node_index:
-                        painter.setBrush(QColor("#0078d7"))
-                    else:
-                        painter.setBrush(QColor("white"))
-                    painter.drawRect(node_rect)
+                center = shape.get_bounding_box().center()
+                painter.translate(center); painter.scale(shape.scale_x, shape.scale_y); painter.rotate(shape.angle); painter.translate(-center)
+                bbox_to_draw = shape.get_bounding_box()
             else:
-                total_bbox = self.canvas._get_selection_bbox()
-                if not total_bbox.isEmpty():
-                    pen = QPen(QColor(0, 150, 255), 2, Qt.PenStyle.DashLine)
-                    painter.setPen(pen)
-                    painter.setBrush(Qt.BrushStyle.NoBrush)
-                    painter.drawRect(total_bbox.adjusted(-5, -5, 5, 5))
-                    painter.setBrush(QColor("white"))
-                    painter.setPen(QColor("black"))
-                    for corner in self._get_corner_rects(total_bbox.adjusted(-5, -5, 5, 5)).values():
-                        painter.drawRect(corner)
+                bbox_to_draw = total_bbox_transformed
+
+            pen = QPen(QColor(0, 150, 255), 2, Qt.PenStyle.DashLine)
+            painter.setPen(pen); painter.setBrush(Qt.BrushStyle.NoBrush)
+            painter.drawRect(bbox_to_draw.adjusted(-5, -5, 5, 5))
+
+            handle_start = QPoint(bbox_to_draw.center().x(), bbox_to_draw.top() - 5)
+            handle_end = QPoint(handle_start.x(), handle_start.y() - 20)
+            painter.setPen(QPen(QColor(0, 150, 255), 2)); painter.drawLine(handle_start, handle_end)
+            painter.setBrush(QColor("white")); painter.setPen(QColor("black"))
+            painter.drawEllipse(handle_end, 5, 5)
+
+            for corner_rect in self._get_corner_rects(bbox_to_draw.adjusted(-5, -5, 5, 5)).values():
+                painter.drawRect(corner_rect)
+            
+            painter.restore()
 
     def _handle_multiselect_finish(self):
         selection_box = self.selection_rect.normalized()
         modifiers = QApplication.keyboardModifiers()
-        if not (modifiers == Qt.KeyboardModifier.ShiftModifier):
-            self.canvas.selected_shapes.clear()
+        if not (modifiers == Qt.KeyboardModifier.ShiftModifier): self.canvas.selected_shapes.clear()
         for layer in self.canvas.layers:
-            if not layer.is_visible or layer.is_locked:
-                continue
+            if not layer.is_visible or layer.is_locked: continue
             for shape in layer.shapes:
-                if selection_box.intersects(shape.get_bounding_box()) and shape not in self.canvas.selected_shapes:
+                if selection_box.intersects(shape.get_transformed_bounding_box()) and shape not in self.canvas.selected_shapes:
                     self.canvas.selected_shapes.append(shape)
 
     def _handle_node_press(self, event):
         if len(self.canvas.selected_shapes) == 1:
             shape = self.canvas.selected_shapes[0]
+            transform, _ = self._get_transform_for_shape(shape)
             self.selected_node_index = -1
-            for i, node in enumerate(shape.get_nodes()):
-                if QRect(node.x() - 5, node.y() - 5, 10, 10).contains(event.pos()):
+            for i, node_pos in enumerate(shape.get_nodes()):
+                transformed_node_pos = transform.map(node_pos)
+                if QRect(transformed_node_pos.x() - 5, transformed_node_pos.y() - 5, 10, 10).contains(event.pos()):
                     self.selected_node_index = i
-                    self.action_start_position = event.pos()
-                    self.original_shape_for_node_edit = shape.clone()
+                    self.original_node_position = node_pos
                     break
             self.canvas.update()
 
     def _handle_node_move(self, event):
         if self.selected_node_index != -1 and (event.buttons() & Qt.MouseButton.LeftButton):
             shape = self.canvas.selected_shapes[0]
-            shape.set_node_at(self.selected_node_index, event.pos())
+            _, inverted_transform = self._get_transform_for_shape(shape)
+            local_mouse_pos = inverted_transform.map(event.pos())
+            shape.set_node_at(self.selected_node_index, local_mouse_pos)
             self.canvas.update()
 
     def _handle_node_release(self, event):
+        if self.selected_node_index != -1:
+            shape = self.canvas.selected_shapes[0]
+            current_node_pos = shape.get_nodes()[self.selected_node_index]
+            if self.original_node_position is not None and self.original_node_position != current_node_pos:
+                command = ModifyNodeCommand(shape, self.selected_node_index, self.original_node_position, current_node_pos)
+                shape.set_node_at(self.selected_node_index, self.original_node_position)
+                self.canvas.execute_command(command)
         self.selected_node_index = -1
-        self.action_start_position = None
-        self.original_shape_for_node_edit = None
+        self.original_node_position = None
         self.canvas.update()
 
     def _get_corner_rects(self, main_rect):
         size = 10
-        return {
-            'topLeft': QRect(main_rect.left()-size//2, main_rect.top()-size//2, size, size),
-            'topRight': QRect(main_rect.right()-size//2, main_rect.top()-size//2, size, size),
-            'bottomLeft': QRect(main_rect.left()-size//2, main_rect.bottom()-size//2, size, size),
-            'bottomRight': QRect(main_rect.right()-size//2, main_rect.bottom()-size//2, size, size)
-        }
+        return { 'topLeft': QRect(main_rect.left()-size//2, main_rect.top()-size//2, size, size), 'topRight': QRect(main_rect.right()-size//2, main_rect.top()-size//2, size, size), 'bottomLeft': QRect(main_rect.left()-size//2, main_rect.bottom()-size//2, size, size), 'bottomRight': QRect(main_rect.right()-size//2, main_rect.bottom()-size//2, size, size) }
 
-    def _is_on_corner(self, pos):
-        if self.canvas.selected_shapes and not self.node_editing_active:
+    def _get_handle_type_at(self, pos):
+        if not self.canvas.selected_shapes or self.node_editing_active: return None
+        
+        # Logic is simpler for multi-selection, uses axis-aligned bounding box
+        if len(self.canvas.selected_shapes) > 1:
             total_bbox = self.canvas._get_selection_bbox()
-            if not total_bbox.isEmpty():
-                corners = self._get_corner_rects(total_bbox.adjusted(-5,-5,5,5))
-                for corner_name, rect in corners.items():
-                    if rect.contains(pos):
-                        return corner_name
+            handle_end = QPoint(total_bbox.center().x(), total_bbox.top() - 25)
+            if (pos - handle_end).manhattanLength() < 10: return "rotate"
+            corners = self._get_corner_rects(total_bbox.adjusted(-5,-5,5,5))
+            for name, rect in corners.items():
+                if rect.contains(pos): return name
+            return None
+
+        # Logic for single selection, uses inverse transform
+        shape_to_check = self.canvas.selected_shapes[0]
+        bbox_untransformed = shape_to_check.get_bounding_box()
+        _, inverted_transform = self._get_transform_for_shape(shape_to_check)
+        local_pos = inverted_transform.map(pos)
+
+        handle_end = QPoint(bbox_untransformed.center().x(), bbox_untransformed.top() - 25)
+        if (local_pos - handle_end).manhattanLength() < 10: return "rotate"
+        
+        corners = self._get_corner_rects(bbox_untransformed.adjusted(-5,-5,5,5))
+        for name, rect in corners.items():
+            if rect.contains(local_pos): return name
+        
         return None
 
     def _update_cursor(self, pos):
-        if self.scaling or self.dragging:
-            return
+        if self.scaling or self.dragging or self.rotating: return
         cursor_shape = Qt.CursorShape.ArrowCursor
-        if self.node_editing_active and self.canvas.selected_shapes:
+        if self.node_editing_active and len(self.canvas.selected_shapes) == 1:
             shape = self.canvas.selected_shapes[0]
+            transform, _ = self._get_transform_for_shape(shape)
             on_node = False
             for node in shape.get_nodes():
-                if QRect(node.x()-4, node.y()-4, 8, 8).contains(pos):
-                    cursor_shape = Qt.CursorShape.PointingHandCursor
-                    on_node = True
-                    break
-            if not on_node:
-                cursor_shape = Qt.CursorShape.ArrowCursor
+                if QRect(transform.map(node).x()-4, transform.map(node).y()-4, 8, 8).contains(pos):
+                    cursor_shape = Qt.CursorShape.PointingHandCursor; on_node = True; break
+            if not on_node: cursor_shape = Qt.CursorShape.ArrowCursor
         else:
-            corner = self._is_on_corner(pos)
-            if corner:
-                if any(self.canvas._get_layer_for_shape(s) is not None and not self.canvas._get_layer_for_shape(s).is_locked for s in self.canvas.selected_shapes):
-                    if corner in ['topLeft', 'bottomRight']:
-                        cursor_shape = Qt.CursorShape.SizeFDiagCursor
-                    else:
-                        cursor_shape = Qt.CursorShape.SizeBDiagCursor
-                else:
-                    cursor_shape = Qt.CursorShape.ForbiddenCursor
-            else:
-                cursor_shape = Qt.CursorShape.ArrowCursor
+            handle_type = self._get_handle_type_at(pos)
+            if handle_type:
+                if any(not self.canvas._get_layer_for_shape(s).is_locked for s in self.canvas.selected_shapes):
+                    if handle_type == 'rotate': cursor_shape = Qt.CursorShape.CrossCursor
+                    elif handle_type in ['topLeft', 'bottomRight']: cursor_shape = Qt.CursorShape.SizeFDiagCursor
+                    else: cursor_shape = Qt.CursorShape.SizeBDiagCursor
+                else: cursor_shape = Qt.CursorShape.ForbiddenCursor
+            else: cursor_shape = Qt.CursorShape.ArrowCursor
         self.canvas.setCursor(QCursor(cursor_shape))
 
+# --- All other Tool classes remain unchanged ---
+# (The following code is identical to the previous version and is included for completeness)
 class BaseDrawingTool(Tool):
     def __init__(self, canvas):
         super().__init__(canvas)
@@ -618,5 +680,3 @@ class PaintBucketTool(Tool):
             }
             command = ChangePropertiesCommand([shape_clicked], properties_to_change)
             self.canvas.execute_command(command)
-
-# --- END OF FILE tools.py ---

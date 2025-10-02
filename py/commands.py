@@ -114,3 +114,44 @@ class ScaleCommand(Command):
     def redo(self):
         for shape in self.shapes:
             shape.scale(self.factor, self.center)
+class RotateCommand(Command):
+    def __init__(self, shapes, rotation_delta):
+        self.shapes = list(shapes)
+        self.rotation_delta = rotation_delta
+
+    def undo(self):
+        for shape in self.shapes:
+            shape.rotate(-self.rotation_delta)
+    
+    def redo(self):
+        for shape in self.shapes:
+            shape.rotate(self.rotation_delta)
+
+class FlipCommand(Command):
+    def __init__(self, shapes, direction):
+        self.shapes = list(shapes)
+        self.direction = direction # 'horizontal' or 'vertical'
+
+    def undo(self):
+        # 翻转操作是自身的逆操作，所以 undo 和 redo 是一样的
+        self.redo()
+
+    def redo(self):
+        for shape in self.shapes:
+            if self.direction == 'horizontal':
+                shape.flip_horizontal()
+            elif self.direction == 'vertical':
+                shape.flip_vertical()
+
+class ModifyNodeCommand(Command):
+    def __init__(self, shape, node_index, old_pos, new_pos):
+        self.shape = shape
+        self.node_index = node_index
+        self.old_pos = old_pos
+        self.new_pos = new_pos
+
+    def undo(self):
+        self.shape.set_node_at(self.node_index, self.old_pos)
+
+    def redo(self):
+        self.shape.set_node_at(self.node_index, self.new_pos)

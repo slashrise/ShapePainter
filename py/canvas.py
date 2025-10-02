@@ -290,6 +290,19 @@ class CanvasWidget(QWidget):
         if isinstance(self.current_tool_obj, SelectTool) and self.selected_shapes:
             menu = QMenu(self)
             menu.setStyleSheet("QMenu::item:selected { background-color: #0078d7; color: white; }")
+
+            # --- 新增翻转菜单项 ---
+            flip_horizontal_action = QAction("水平翻转", self)
+            flip_horizontal_action.triggered.connect(self.flip_selected_horizontal)
+            menu.addAction(flip_horizontal_action)
+
+            flip_vertical_action = QAction("垂直翻转", self)
+            flip_vertical_action.triggered.connect(self.flip_selected_vertical)
+            menu.addAction(flip_vertical_action)
+            
+            menu.addSeparator()
+            # --- 结束新增 ---
+
             delete_action = QAction("删除", self)
             delete_action.triggered.connect(self.delete_selected)
             menu.addAction(delete_action)
@@ -434,9 +447,10 @@ class CanvasWidget(QWidget):
     def _get_selection_bbox(self):
         if not self.selected_shapes:
             return QRect()
-        total_bbox = self.selected_shapes[0].get_bounding_box()
+        # --- 使用新方法 ---
+        total_bbox = self.selected_shapes[0].get_transformed_bounding_box()
         for shape in self.selected_shapes[1:]:
-            total_bbox = total_bbox.united(shape.get_bounding_box())
+            total_bbox = total_bbox.united(shape.get_transformed_bounding_box())
         return total_bbox
 
     def _get_layer_for_shape(self, shape_to_find):
@@ -456,3 +470,19 @@ class CanvasWidget(QWidget):
 
     def _draw_arrow(self, painter, p1, p2, color, width):
         CanvasRenderer.draw_arrow(painter, p1, p2, color, width)
+    
+    def flip_selected_horizontal(self):
+        if self.selected_shapes:
+            unlocked_shapes = [s for s in self.selected_shapes if not self._get_layer_for_shape(s).is_locked]
+            if unlocked_shapes:
+                # --- 使用新的 FlipCommand ---
+                command = FlipCommand(unlocked_shapes, 'horizontal')
+                self.execute_command(command)
+
+    def flip_selected_vertical(self):
+        if self.selected_shapes:
+            unlocked_shapes = [s for s in self.selected_shapes if not self._get_layer_for_shape(s).is_locked]
+            if unlocked_shapes:
+                # --- 使用新的 FlipCommand ---
+                command = FlipCommand(unlocked_shapes, 'vertical')
+                self.execute_command(command)
