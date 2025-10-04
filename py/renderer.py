@@ -1,5 +1,3 @@
-# --- START OF FILE renderer.py ---
-
 import math
 from typing import Union
 from PyQt6.QtWidgets import QWidget
@@ -7,10 +5,10 @@ from PyQt6.QtGui import QPainter, QPen, QColor, QBrush, QPolygon, QPolygonF, QPa
 from PyQt6.QtCore import Qt, QRect, QPoint, QPointF, QLineF, QRectF
 
 from shapes import (Text, Square, Ellipse, RoundedRectangle, Polygon, Circle, Rectangle,
-                    Point, Line, Arc, Polyline, ShapeGroup, Arrow)
+                    Point, Line, Path, Polyline, ShapeGroup, Arrow)
 
 AnyShape = Union[Text, Square, Ellipse, RoundedRectangle, Polygon, Circle, Rectangle,
-                 Point, Line, Arc, Polyline, ShapeGroup, Arrow]
+                 Point, Line, Path, Polyline, ShapeGroup, Arrow]
 
 class CanvasRenderer:
     @staticmethod
@@ -31,40 +29,37 @@ class CanvasRenderer:
 
     @staticmethod
     def _draw_shape_recursive(painter: QPainter, shape: AnyShape):
-        if isinstance(shape, ShapeGroup):
-            for sub_shape in shape.shapes:
-                CanvasRenderer._draw_shape_recursive(painter, sub_shape)
-        else:
-            CanvasRenderer._draw_single_shape(painter, shape)
+        painter.save() # 保存当前状态
 
-    @staticmethod
-    def _draw_single_shape(painter: QPainter, shape: AnyShape):
-        painter.save()
-
+        # --- 新增逻辑：应用当前图形(可能是组合)的变换 ---
         bbox = shape.get_bounding_box()
         center = bbox.center()
-
         painter.translate(center)
-        
-        # --- 这是需要修改的地方 ---
-        # 旧的错误顺序:
-        # painter.rotate(shape.angle)
-        # painter.scale(shape.scale_x, shape.scale_y)
-        
-        # 新的正确顺序:
         painter.scale(shape.scale_x, shape.scale_y)
         painter.rotate(shape.angle)
-        # --- 修改结束 ---
-        
         painter.translate(-center)
+        # --- 结束新增 ---
+        
+        if isinstance(shape, ShapeGroup):
+            # 对于组合，我们已经应用了组合的变换，现在只需要画出它的子图形
+            # 注意：子图形自身的变换也需要被绘制，所以再次调用递归函数
+            for sub_shape in shape.shapes:
+                # 再次调用递归，而不是直接调用 _draw_single_shape
+                CanvasRenderer._draw_shape_recursive(painter, sub_shape)
+        else:
+            # 对于单个图形，我们不需要再应用变换，因为已经在上面应用过了
+            # 所以我们创建一个 "dummy_draw" 方法来跳过变换部分
+            CanvasRenderer._draw_single_shape_no_transform(painter, shape)
 
+        painter.restore() # 恢复到调用前的状态
 
-        # --- 以下是几乎不变的原始绘制逻辑 ---
+    @staticmethod
+    def _draw_single_shape_no_transform(painter: QPainter, shape: AnyShape):
+        # 这是一个新的辅助方法，它只包含绘制逻辑，没有变换逻辑
         if isinstance(shape, Text):
             painter.setFont(shape.font)
             pen = QPen(shape.color)
             painter.setPen(pen)
-            # 注意：drawText 需要 QRectF 以支持浮点精度
             painter.drawText(QRectF(shape.get_bounding_box()), Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignTop | Qt.TextFlag.TextWordWrap, shape.text)
             if shape.has_border:
                 pen = QPen(shape.border_color, 1)
@@ -75,14 +70,14 @@ class CanvasRenderer:
             pen = QPen(shape.color, shape.width)
             painter.setPen(pen)
             
-            if hasattr(shape, 'fill_color') and shape.fill_color:
+            if hasattr(shape, 'fill_color') and shape.fill_color and not (isinstance(shape, Path) and not shape.is_closed):
                 painter.setBrush(QBrush(shape.fill_color, shape.fill_style))
             else:
                 painter.setBrush(Qt.BrushStyle.NoBrush)
             
             if isinstance(shape, Arrow):
                 CanvasRenderer.draw_arrow(painter, shape.p1, shape.p2, shape.color, shape.width)
-            elif isinstance(shape, Arc):
+            elif isinstance(shape, Path):
                 painter.drawPath(shape.get_painter_path())
             elif isinstance(shape, Polyline) and len(shape.points) >= 2:
                 painter.drawPolyline(QPolygon(shape.points))
@@ -101,8 +96,6 @@ class CanvasRenderer:
                 painter.drawRoundedRect(shape.get_bounding_box(), 20, 20)
             elif isinstance(shape, Polygon) and len(shape.points) >= 3:
                 painter.drawPolygon(QPolygon(shape.points))
-
-        painter.restore() # 恢复 painter 到 save() 之前的状态
 
     @staticmethod
     def draw_arrow(painter: QPainter, p1: QPoint, p2: QPoint, color: QColor, width: int):

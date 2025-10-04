@@ -155,3 +155,16 @@ class ModifyNodeCommand(Command):
 
     def redo(self):
         self.shape.set_node_at(self.node_index, self.new_pos)
+
+class AddShapesCommand(Command):
+    def __init__(self, layer, shapes):
+        self.layer = layer
+        self.shapes = list(shapes)  # 确保我们操作的是列表副本
+
+    def undo(self):
+        # 从图层中移除这些刚刚添加的图形
+        self.layer.shapes = [s for s in self.layer.shapes if s not in self.shapes]
+
+    def redo(self):
+        # 将这些图形重新添加到图层中
+        self.layer.shapes.extend(self.shapes)

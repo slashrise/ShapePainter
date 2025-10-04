@@ -1,7 +1,5 @@
-# --- START OF FILE canvas.py ---
-
 from PyQt6.QtWidgets import QWidget, QFileDialog, QMenu, QColorDialog, QTextEdit, QFontDialog, QApplication
-from PyQt6.QtGui import QPainter, QColor, QPixmap, QAction, QFont, QBrush
+from PyQt6.QtGui import QPainter, QColor, QPixmap, QAction, QFont, QBrush, QKeySequence
 from PyQt6.QtCore import Qt, QPoint, QRect, pyqtSignal
 from PyQt6.QtSvg import QSvgGenerator
 
@@ -16,6 +14,8 @@ class CanvasWidget(QWidget):
     redo_stack_changed = pyqtSignal(bool)
     layers_changed = pyqtSignal(list, int)
     mouse_moved_signal = pyqtSignal(QPoint)
+    selection_changed_signal = pyqtSignal(bool)
+    clipboard_changed_signal = pyqtSignal(bool)
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -24,7 +24,9 @@ class CanvasWidget(QWidget):
         
         self.layers, self.current_layer_index = [], -1
         self.undo_stack, self.redo_stack = [], []
+        self.clipboard = []
         self.selected_shapes = []
+        self.last_mouse_pos = QPoint(0, 0)
         self.current_pen_color = QColor(0, 0, 0)
         self.current_width = 2
         self.current_fill_color = None
@@ -45,7 +47,7 @@ class CanvasWidget(QWidget):
             "text": TextTool(self),
             "polyline": PolylineTool(self),
             "polygon": PolygonTool(self),
-            "arc": ArcTool(self),
+            "pen": PenTool(self), # <--- 替换 "arc"
             "freehand": FreehandTool(self),
             "eraser": EraserTool(self),
             "paint_bucket": PaintBucketTool(self),
@@ -85,6 +87,7 @@ class CanvasWidget(QWidget):
         if tool_name in self.tools:
             self.current_tool_obj = self.tools[tool_name]
             self.current_tool_obj.activate()
+        self.selection_changed_signal.emit(False)
 
     def set_pen_color(self, color):
         if color.isValid():
@@ -236,6 +239,7 @@ class CanvasWidget(QWidget):
             command = GroupCommand(current_layer, self.selected_shapes)
             self.execute_command(command)
             self.selected_shapes = [command.group]
+            self.selection_changed_signal.emit(True)
             self.update()
 
     def ungroup_selected(self):
@@ -251,6 +255,7 @@ class CanvasWidget(QWidget):
                 newly_ungrouped_shapes.extend(command.shapes_inside)
             remaining_selection = [s for s in self.selected_shapes if not isinstance(s, ShapeGroup)]
             self.selected_shapes = remaining_selection + newly_ungrouped_shapes
+            self.selection_changed_signal.emit(bool(self.selected_shapes))
             self.update()
 
     def paintEvent(self, event):
@@ -263,8 +268,10 @@ class CanvasWidget(QWidget):
         self._finish_text_editing()
         if self.current_tool_obj:
             self.current_tool_obj.mousePressEvent(event)
+        self.selection_changed_signal.emit(bool(self.selected_shapes))
 
     def mouseMoveEvent(self, event):
+        self.last_mouse_pos = event.pos()
         self.mouse_moved_signal.emit(event.pos())
         if self.current_tool_obj:
             self.current_tool_obj.mouseMoveEvent(event)
@@ -272,6 +279,7 @@ class CanvasWidget(QWidget):
     def mouseReleaseEvent(self, event):
         if self.current_tool_obj:
             self.current_tool_obj.mouseReleaseEvent(event)
+        self.selection_changed_signal.emit(bool(self.selected_shapes))
 
     def mouseDoubleClickEvent(self, event):
         shape_clicked, layer_of_shape = self._get_shape_at(event.pos())
@@ -281,6 +289,18 @@ class CanvasWidget(QWidget):
             self.current_tool_obj.mouseDoubleClickEvent(event)
 
     def keyPressEvent(self, event):
+        if event.matches(QKeySequence.StandardKey.Copy):
+            self.copy_selected()
+            return
+        
+        if event.key() == Qt.Key.Key_V and event.modifiers() == (Qt.KeyboardModifier.ControlModifier | Qt.KeyboardModifier.ShiftModifier):
+            self.paste_in_place()
+            return
+
+        if event.matches(QKeySequence.StandardKey.Paste):
+            self.paste()
+            return
+
         if self.current_tool_obj:
             self.current_tool_obj.keyPressEvent(event)
         else:
@@ -291,21 +311,11 @@ class CanvasWidget(QWidget):
             menu = QMenu(self)
             menu.setStyleSheet("QMenu::item:selected { background-color: #0078d7; color: white; }")
 
-            # --- 新增翻转菜单项 ---
-            flip_horizontal_action = QAction("水平翻转", self)
-            flip_horizontal_action.triggered.connect(self.flip_selected_horizontal)
-            menu.addAction(flip_horizontal_action)
-
-            flip_vertical_action = QAction("垂直翻转", self)
-            flip_vertical_action.triggered.connect(self.flip_selected_vertical)
-            menu.addAction(flip_vertical_action)
-            
+            flip_horizontal_action = QAction("水平翻转", self); flip_horizontal_action.triggered.connect(self.flip_selected_horizontal); menu.addAction(flip_horizontal_action)
+            flip_vertical_action = QAction("垂直翻转", self); flip_vertical_action.triggered.connect(self.flip_selected_vertical); menu.addAction(flip_vertical_action)
             menu.addSeparator()
-            # --- 结束新增 ---
 
-            delete_action = QAction("删除", self)
-            delete_action.triggered.connect(self.delete_selected)
-            menu.addAction(delete_action)
+            delete_action = QAction("删除", self); delete_action.triggered.connect(self.delete_selected); menu.addAction(delete_action)
             
             has_text = any(isinstance(s, Text) for s in self.selected_shapes)
             has_other_shapes = any(not isinstance(s, Text) for s in self.selected_shapes)
@@ -337,16 +347,29 @@ class CanvasWidget(QWidget):
             for shape in self.selected_shapes:
                 layer = self._get_layer_for_shape(shape)
                 if layer and not layer.is_locked:
-                    if layer not in shapes_by_layer:
-                        shapes_by_layer[layer] = []
+                    if layer not in shapes_by_layer: shapes_by_layer[layer] = []
                     shapes_by_layer[layer].append(shape)
             for layer, shapes_in_layer in shapes_by_layer.items():
                 command = RemoveShapesCommand(layer, shapes_in_layer)
                 self.execute_command(command)
             self.selected_shapes.clear()
-            if hasattr(self.current_tool_obj, 'node_editing_active'):
-                self.current_tool_obj.node_editing_active = False
+            self.selection_changed_signal.emit(False)
+            if hasattr(self.current_tool_obj, 'node_editing_active'): self.current_tool_obj.node_editing_active = False
             self.update()
+
+    def flip_selected_horizontal(self):
+        if self.selected_shapes:
+            unlocked_shapes = [s for s in self.selected_shapes if not self._get_layer_for_shape(s).is_locked]
+            if unlocked_shapes:
+                command = FlipCommand(unlocked_shapes, 'horizontal')
+                self.execute_command(command)
+
+    def flip_selected_vertical(self):
+        if self.selected_shapes:
+            unlocked_shapes = [s for s in self.selected_shapes if not self._get_layer_for_shape(s).is_locked]
+            if unlocked_shapes:
+                command = FlipCommand(unlocked_shapes, 'vertical')
+                self.execute_command(command)
 
     def change_selected_pen_color(self):
         if self.selected_shapes:
@@ -384,19 +407,16 @@ class CanvasWidget(QWidget):
         fillable_shapes = [s for s in self.selected_shapes if hasattr(s, 'fill_color')]
         if fillable_shapes:
             props = {'fill_style': style}
-            if style == Qt.BrushStyle.NoBrush:
-                props['fill_color'] = None
+            if style == Qt.BrushStyle.NoBrush: props['fill_color'] = None
             else:
                 current_color = next((s.fill_color for s in fillable_shapes if s.fill_color), None)
-                if not current_color:
-                    props['fill_color'] = QColor(0,0,0)
+                if not current_color: props['fill_color'] = QColor(0,0,0)
             command = ChangePropertiesCommand(fillable_shapes, props)
             self.execute_command(command)
 
     def change_selected_font(self):
         text_shapes = [s for s in self.selected_shapes if isinstance(s, Text)]
-        if not text_shapes:
-            return
+        if not text_shapes: return
         font, ok = QFontDialog.getFont(text_shapes[0].font, self, "选择字体")
         if ok:
             command = ChangePropertiesCommand(text_shapes, {'font': font})
@@ -414,8 +434,7 @@ class CanvasWidget(QWidget):
         self._start_text_editing(text_shape)
 
     def _start_text_editing(self, text_shape):
-        if self.text_editor:
-            self._finish_text_editing()
+        if self.text_editor: self._finish_text_editing()
         self.editing_shape = text_shape
         self.text_editor = QTextEdit(self)
         self.text_editor.setText(self.editing_shape.text)
@@ -445,9 +464,7 @@ class CanvasWidget(QWidget):
         return super().eventFilter(obj, event)
 
     def _get_selection_bbox(self):
-        if not self.selected_shapes:
-            return QRect()
-        # --- 使用新方法 ---
+        if not self.selected_shapes: return QRect()
         total_bbox = self.selected_shapes[0].get_transformed_bounding_box()
         for shape in self.selected_shapes[1:]:
             total_bbox = total_bbox.united(shape.get_transformed_bounding_box())
@@ -460,29 +477,60 @@ class CanvasWidget(QWidget):
         return None
 
     def _get_shape_at(self, pos):
-        for layer in self.layers:
-            if not layer.is_visible:
-                continue
+        for layer in reversed(self.layers):
+            if not layer.is_visible: continue
             for shape in reversed(layer.shapes):
-                if shape.get_bounding_box().contains(pos):
+                if shape.get_transformed_bounding_box().contains(pos):
                     return shape, layer
         return None, None
 
     def _draw_arrow(self, painter, p1, p2, color, width):
         CanvasRenderer.draw_arrow(painter, p1, p2, color, width)
-    
-    def flip_selected_horizontal(self):
-        if self.selected_shapes:
-            unlocked_shapes = [s for s in self.selected_shapes if not self._get_layer_for_shape(s).is_locked]
-            if unlocked_shapes:
-                # --- 使用新的 FlipCommand ---
-                command = FlipCommand(unlocked_shapes, 'horizontal')
-                self.execute_command(command)
 
-    def flip_selected_vertical(self):
+    def copy_selected(self):
         if self.selected_shapes:
-            unlocked_shapes = [s for s in self.selected_shapes if not self._get_layer_for_shape(s).is_locked]
-            if unlocked_shapes:
-                # --- 使用新的 FlipCommand ---
-                command = FlipCommand(unlocked_shapes, 'vertical')
-                self.execute_command(command)
+            self.clipboard = [shape.clone() for shape in self.selected_shapes]
+            self.clipboard_changed_signal.emit(True)
+
+    def paste(self, position=None):
+        current_layer = self.get_current_layer()
+        if not self.clipboard or not current_layer or current_layer.is_locked:
+            return
+
+        if isinstance(position, QPoint):
+            target_pos = position
+        else:
+            target_pos = self.last_mouse_pos
+
+        clipboard_bbox = self.clipboard[0].get_transformed_bounding_box()
+        for shape in self.clipboard[1:]:
+            clipboard_bbox = clipboard_bbox.united(shape.get_transformed_bounding_box())
+
+        offset = target_pos - clipboard_bbox.topLeft()
+
+        pasted_shapes = []
+        for shape in self.clipboard:
+            new_shape = shape.clone()
+            new_shape.move(offset.x(), offset.y())
+            pasted_shapes.append(new_shape)
+        
+        command = AddShapesCommand(current_layer, pasted_shapes)
+        self.execute_command(command)
+
+        self.selected_shapes = pasted_shapes
+        self.selection_changed_signal.emit(True)
+        self.update()
+
+    def paste_in_place(self):
+        current_layer = self.get_current_layer()
+        if not self.clipboard or not current_layer or current_layer.is_locked:
+            return
+
+        pasted_shapes = [shape.clone() for shape in self.clipboard]
+        
+        command = AddShapesCommand(current_layer, pasted_shapes)
+        self.execute_command(command)
+
+        self.selected_shapes = pasted_shapes
+        self.selection_changed_signal.emit(True)
+        self.update()

@@ -1,3 +1,5 @@
+# --- START OF FILE file_handler.py (Complete and Corrected) ---
+
 import json
 from PyQt6.QtGui import QColor, QFont
 from PyQt6.QtCore import Qt, QRect, QPoint
@@ -13,17 +15,37 @@ class ProjectHandler:
             shapes_data = []
             for shape in layer.shapes:
                 shape_dict = None
-                common_attrs = {"color": shape.color.name(), "width": shape.width if hasattr(shape, 'width') else 0}
+                common_attrs = {
+                    "color": shape.color.name(), 
+                    "width": shape.width if hasattr(shape, 'width') else 0,
+                    "angle": shape.angle,
+                    "scale_x": shape.scale_x,
+                    "scale_y": shape.scale_y
+                }
                 if hasattr(shape, 'fill_color'):
                     common_attrs["fill_color"] = shape.fill_color.name() if shape.fill_color else None
                     common_attrs["fill_style"] = int(shape.fill_style)
                 
                 if isinstance(shape, Text):
                     shape_dict = {"type": "text", "rect": [shape.rect.x(), shape.rect.y(), shape.rect.width(), shape.rect.height()], "text": shape.text, "font_family": shape.font.family(), "font_size": shape.font.pointSize(), "color": shape.color.name(), "has_border": shape.has_border, "border_color": shape.border_color.name()}
+                    shape_dict.update(common_attrs)
                 elif isinstance(shape, Arrow):
                     shape_dict = {"type": "arrow", "p1": [shape.p1.x(), shape.p1.y()], "p2": [shape.p2.x(), shape.p2.y()], **common_attrs}
-                elif isinstance(shape, Arc):
-                    points_data = [[p.x(), p.y()] for p in [shape.p1, shape.p2, shape.p3]]; shape_dict = {"type": "arc", "points": points_data, **common_attrs}
+                
+                elif isinstance(shape, Path):
+                    sub_paths_data = []
+                    for sub_path in shape.sub_paths:
+                        segments_data = []
+                        for seg in sub_path:
+                            segments_data.append({
+                                "anchor": [seg.anchor.x(), seg.anchor.y()],
+                                "handle1": [seg.handle1.x(), seg.handle1.y()],
+                                "handle2": [seg.handle2.x(), seg.handle2.y()],
+                                "node_type": seg.node_type
+                            })
+                        sub_paths_data.append(segments_data)
+                    shape_dict = {"type": "path", "sub_paths": sub_paths_data, **common_attrs}
+                
                 elif isinstance(shape, (Polyline, Polygon)):
                     points_data = [[p.x(), p.y()] for p in shape.points]; shape_dict = {"type": "polyline" if isinstance(shape, Polyline) else "polygon", "points": points_data, **common_attrs}
                 elif isinstance(shape, Point):
@@ -77,9 +99,26 @@ class ProjectHandler:
                     font = QFont(shape_data.get("font_family", "Arial"), shape_data.get("font_size", 20))
                     has_border = shape_data.get("has_border", False); border_color = QColor(shape_data.get("border_color", "#000000"))
                     new_shape = Text(rect, shape_data["text"], font, pen_color, has_border, border_color)
-                elif shape_type == "arc":
-                    points = [QPoint(p[0], p[1]) for p in shape_data["points"]]
-                    new_shape = Arc(points[0], points[1], points[2], pen_color, width)
+                
+                elif shape_type == "path":
+                    sub_paths = []
+                    # Handle old format (with "segments") and new format (with "sub_paths")
+                    sub_paths_list_data = shape_data.get("sub_paths")
+                    if sub_paths_list_data is None: # Legacy format
+                        sub_paths_list_data = [shape_data.get("segments", [])]
+
+                    for sub_path_data in sub_paths_list_data:
+                        segments = []
+                        for seg_data in sub_path_data:
+                            anchor = QPoint(seg_data["anchor"][0], seg_data["anchor"][1])
+                            handle1 = QPoint(seg_data["handle1"][0], seg_data["handle1"][1])
+                            handle2 = QPoint(seg_data["handle2"][0], seg_data["handle2"][1])
+                            node_type = seg_data.get("node_type", PathSegment.CORNER)
+                            segments.append(PathSegment(anchor, handle1, handle2, node_type))
+                        sub_paths.append(segments)
+                    # The 'is_closed' property is now dynamically calculated, so we don't load it from the file for Path
+                    new_shape = Path(sub_paths, pen_color, width)
+                
                 elif shape_type == "polyline":
                     points = [QPoint(p[0], p[1]) for p in shape_data["points"]]
                     new_shape = Polyline(points, pen_color, width)
@@ -111,8 +150,17 @@ class ProjectHandler:
                     new_shape = Polygon(points, pen_color, width, fill_color, fill_style)
                 
                 if new_shape:
+                    new_shape.angle = shape_data.get("angle", 0.0)
+                    new_shape.scale_x = shape_data.get("scale_x", 1.0)
+                    new_shape.scale_y = shape_data.get("scale_y", 1.0)
+                    if hasattr(new_shape, 'fill_color'): # Check again for shapes that might not have it
+                        new_shape.fill_color = fill_color
+                        new_shape.fill_style = fill_style
+                    
                     new_layer.shapes.append(new_shape)
             
             loaded_layers.append(new_layer)
             
         return loaded_layers
+        
+# --- END OF FILE file_handler.py ---

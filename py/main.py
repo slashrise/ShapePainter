@@ -1,4 +1,4 @@
-# --- START OF FILE main.py ---
+# --- START OF FILE main.py (with Copy-Paste) ---
 
 import sys
 import os
@@ -46,19 +46,43 @@ class MainWindow(QMainWindow):
         file_menu.addAction(action_load)
 
         self.undo_action = QAction("撤销", self)
-        self.undo_action.setShortcut(QKeySequence("Ctrl+Z"))
+        self.undo_action.setShortcut(QKeySequence.StandardKey.Undo)
         self.undo_action.triggered.connect(self.canvas.undo)
         edit_menu.addAction(self.undo_action)
 
         self.redo_action = QAction("重做", self)
-        self.redo_action.setShortcut(QKeySequence("Ctrl+Y"))
+        self.redo_action.setShortcut(QKeySequence.StandardKey.Redo)
         self.redo_action.triggered.connect(self.canvas.redo)
         edit_menu.addAction(self.redo_action)
 
+        edit_menu.addSeparator()
+
+        # --- 新增复制粘贴菜单项 ---
+        self.copy_action = QAction("复制", self)
+        self.copy_action.setShortcut(QKeySequence.StandardKey.Copy)
+        self.copy_action.triggered.connect(self.canvas.copy_selected)
+        edit_menu.addAction(self.copy_action)
+
+        self.paste_action = QAction("粘贴", self)
+        self.paste_action.setShortcut(QKeySequence.StandardKey.Paste)
+        self.paste_action.triggered.connect(self.canvas.paste)
+        edit_menu.addAction(self.paste_action)
+        self.paste_in_place_action = QAction("原位粘贴", self)
+        self.paste_in_place_action.setShortcut("Ctrl+Shift+V")
+        self.paste_in_place_action.triggered.connect(self.canvas.paste_in_place)
+        edit_menu.addAction(self.paste_in_place_action)
+
+        # --- 连接信号以控制菜单项的可用状态 ---
+        self.canvas.selection_changed_signal.connect(self.copy_action.setEnabled)
+        self.canvas.clipboard_changed_signal.connect(self.paste_action.setEnabled)
         self.canvas.undo_stack_changed.connect(self.undo_action.setEnabled)
         self.canvas.redo_stack_changed.connect(self.redo_action.setEnabled)
+        
+        # --- 初始状态下禁用 ---
         self.undo_action.setEnabled(False)
         self.redo_action.setEnabled(False)
+        self.copy_action.setEnabled(False)
+        self.paste_action.setEnabled(False)
 
         action_add_text = QAction("文本框", self)
         action_add_text.triggered.connect(self.add_text)
@@ -123,7 +147,7 @@ class MainWindow(QMainWindow):
         action_rounded_rect = create_action_with_icon("rounded rectangle.svg", "画圆角矩形", self); action_rounded_rect.triggered.connect(lambda: self.canvas.set_tool("rounded_rect")); self.draw_toolbar.addAction(action_rounded_rect)
         action_polygon = create_action_with_icon("pentagon.svg", "画多边形", self); action_polygon.triggered.connect(lambda: self.canvas.set_tool("polygon")); self.draw_toolbar.addAction(action_polygon)
         action_polyline = create_action_with_icon("polyline.svg", "画折线", self); action_polyline.triggered.connect(lambda: self.canvas.set_tool("polyline")); self.draw_toolbar.addAction(action_polyline)
-        action_arc = create_action_with_icon("line_curve.svg", "画弧形", self); action_arc.triggered.connect(lambda: self.canvas.set_tool("arc")); self.draw_toolbar.addAction(action_arc)
+        action_pen = create_action_with_icon("line_curve.svg", "贝塞尔曲线", self); action_pen.triggered.connect(lambda: self.canvas.set_tool("pen")); self.draw_toolbar.addAction(action_pen)
         
         action_select = create_action_with_icon("mouse pointer.svg", "选择", self); action_select.triggered.connect(lambda: self.canvas.set_tool("select")); self.edit_attr_toolbar.addAction(action_select)
         action_eraser = create_action_with_icon("eraser.svg", "橡皮擦", self); action_eraser.triggered.connect(lambda: self.canvas.set_tool("eraser")); self.edit_attr_toolbar.addAction(action_eraser)
