@@ -168,3 +168,18 @@ class AddShapesCommand(Command):
     def redo(self):
         # 将这些图形重新添加到图层中
         self.layer.shapes.extend(self.shapes)
+
+class CompositeCommand(Command):
+    """A command that groups other commands into a single undo/redo operation."""
+    def __init__(self, commands):
+        self.commands = commands
+
+    def undo(self):
+        # Undo commands in reverse order
+        for cmd in reversed(self.commands):
+            cmd.undo()
+
+    def redo(self):
+        # Redo commands in normal order
+        for cmd in self.commands:
+            cmd.redo()

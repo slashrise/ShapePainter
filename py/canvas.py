@@ -8,6 +8,7 @@ from commands import *
 from file_handler import ProjectHandler
 from renderer import CanvasRenderer
 from tools import *
+from aligner import Aligner
 
 class CanvasWidget(QWidget):
     undo_stack_changed = pyqtSignal(bool)
@@ -34,6 +35,13 @@ class CanvasWidget(QWidget):
         self.current_font = QFont("Arial", 24)
         self.editing_shape = None
         self.text_editor = None
+        self.grid_enabled = False
+        self.snap_enabled = False
+        self.grid_size = 20
+        self.snap_threshold = 8
+        self.horizontal_guides = []
+        self.vertical_guides = []
+        self.guides_enabled = True # <--- 新增：控制参考线的可见性
         self.tools = {
             "select": SelectTool(self),
             "point": PointTool(self),
@@ -261,8 +269,24 @@ class CanvasWidget(QWidget):
     def paintEvent(self, event):
         painter = QPainter(self)
         painter.fillRect(self.rect(), Qt.GlobalColor.white)
+        
+        # --- 新增：绘制网格和参考线 ---
+        if self.grid_enabled:
+            self.draw_grid(painter)
+        self.draw_guides(painter)
+
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
         CanvasRenderer.paint(painter, self)
+    
+    def draw_grid(self, painter):
+        pen = QPen(QColor(220, 220, 220), 1, Qt.PenStyle.DotLine)
+        painter.setPen(pen)
+        width, height = self.width(), self.height()
+        
+        for x in range(0, width, self.grid_size):
+            painter.drawLine(x, 0, x, height)
+        for y in range(0, height, self.grid_size):
+            painter.drawLine(0, y, width, y)
 
     def mousePressEvent(self, event):
         self._finish_text_editing()
@@ -534,3 +558,101 @@ class CanvasWidget(QWidget):
         self.selected_shapes = pasted_shapes
         self.selection_changed_signal.emit(True)
         self.update()
+    def align_selected_shapes(self, mode):
+            if len(self.selected_shapes) < 2:
+                return
+
+            # 确保我们只对未锁定的图形进行操作
+            unlocked_shapes = [s for s in self.selected_shapes if not self._get_layer_for_shape(s).is_locked]
+            if len(unlocked_shapes) < 2:
+                return
+
+            # 1. 使用 Aligner 计算每个图形需要移动的距离
+            moves_to_perform = Aligner.align(unlocked_shapes, mode)
+            
+            if not moves_to_perform:
+                return
+
+            # 2. 为每个移动操作创建一个 MoveShapesCommand
+            move_commands = []
+            for shape, dx, dy in moves_to_perform:
+                # MoveShapesCommand can handle a list, so we wrap the single shape in a list
+                move_commands.append(MoveShapesCommand([shape], dx, dy))
+            
+            # 3. 将所有移动命令打包成一个复合命令
+            composite_command = CompositeCommand(move_commands)
+            
+            # 4. 执行这个复合命令
+            self.execute_command(composite_command)
+    def toggle_grid(self, enabled):
+            self.grid_enabled = enabled
+            self.update()
+
+    def toggle_snapping(self, enabled):
+            self.snap_enabled = enabled
+
+    def snap_point(self, point):
+        if not self.snap_enabled:
+            return point
+
+        snapped_x, snapped_y = point.x(), point.y()
+        min_dist_x, min_dist_y = self.snap_threshold + 1, self.snap_threshold + 1
+
+        # Snap to grid
+        if self.grid_enabled:
+            grid_x = round(point.x() / self.grid_size) * self.grid_size
+            dist_x = abs(point.x() - grid_x)
+            if dist_x < min_dist_x:
+                min_dist_x = dist_x
+                snapped_x = grid_x
+            
+            grid_y = round(point.y() / self.grid_size) * self.grid_size
+            dist_y = abs(point.y() - grid_y)
+            if dist_y < min_dist_y:
+                min_dist_y = dist_y
+                snapped_y = grid_y
+        
+        # Snap to vertical guides
+        for x_guide in self.vertical_guides:
+            dist_x = abs(point.x() - x_guide)
+            if dist_x < min_dist_x:
+                min_dist_x = dist_x
+                snapped_x = x_guide
+
+        # Snap to horizontal guides
+        for y_guide in self.horizontal_guides:
+            dist_y = abs(point.y() - y_guide)
+            if dist_y < min_dist_y:
+                min_dist_y = dist_y
+                snapped_y = y_guide
+
+        # Only apply snap if within threshold
+        final_x = snapped_x if min_dist_x <= self.snap_threshold else point.x()
+        final_y = snapped_y if min_dist_y <= self.snap_threshold else point.y()
+
+        return QPoint(final_x, final_y)
+    def toggle_guides(self, enabled):
+        self.guides_enabled = enabled
+        self.update()
+
+    def add_horizontal_guide(self, y):
+        if y not in self.horizontal_guides:
+            self.horizontal_guides.append(y)
+            self.update()
+
+    def add_vertical_guide(self, x):
+        if x not in self.vertical_guides:
+            self.vertical_guides.append(x)
+            self.update()
+
+    def draw_guides(self, painter):
+        if not self.guides_enabled:
+            return
+        pen = QPen(QColor(0, 150, 255, 150), 1, Qt.PenStyle.DashLine)
+        painter.setPen(pen)
+        width, height = self.width(), self.height()
+        
+        for y in self.horizontal_guides:
+            painter.drawLine(0, y, width, y)
+        for x in self.vertical_guides:
+            painter.drawLine(x, 0, x, height)

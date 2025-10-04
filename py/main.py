@@ -1,4 +1,4 @@
-# --- START OF FILE main.py (with Copy-Paste) ---
+# --- START OF FILE main.py (Fully Updated) ---
 
 import sys
 import os
@@ -9,6 +9,7 @@ from PyQt6.QtGui import QAction, QKeySequence, QIcon, QPalette, QColor, QBrush
 from PyQt6.QtCore import Qt, QSize
 from canvas import CanvasWidget
 from layer_panel import LayerPanel
+from rulers import CanvasView # Import the new CanvasView
 
 def resource_path(relative_path):
     """
@@ -26,8 +27,10 @@ class MainWindow(QMainWindow):
         super().__init__()
         self.setWindowTitle('我的绘图系统 - ShapePainter')
         self.setGeometry(200, 200, 1400, 800)
+        
         self.canvas = CanvasWidget()
-        self.setCentralWidget(self.canvas)
+        self.canvas_view = CanvasView(self.canvas)
+        self.setCentralWidget(self.canvas_view)
 
         # --- 菜单栏 ---
         menu_bar = self.menuBar()
@@ -37,103 +40,61 @@ class MainWindow(QMainWindow):
         view_menu = menu_bar.addMenu("视图")
         export_menu = menu_bar.addMenu("导出")
 
-        action_save = QAction("保存项目...", self)
-        action_save.triggered.connect(self.canvas.save_shapes)
-        file_menu.addAction(action_save)
+        action_save = QAction("保存项目...", self); action_save.triggered.connect(self.canvas.save_shapes); file_menu.addAction(action_save)
+        action_load = QAction("加载项目...", self); action_load.triggered.connect(self.canvas.load_shapes); file_menu.addAction(action_load)
 
-        action_load = QAction("加载项目...", self)
-        action_load.triggered.connect(self.canvas.load_shapes)
-        file_menu.addAction(action_load)
-
-        self.undo_action = QAction("撤销", self)
-        self.undo_action.setShortcut(QKeySequence.StandardKey.Undo)
-        self.undo_action.triggered.connect(self.canvas.undo)
-        edit_menu.addAction(self.undo_action)
-
-        self.redo_action = QAction("重做", self)
-        self.redo_action.setShortcut(QKeySequence.StandardKey.Redo)
-        self.redo_action.triggered.connect(self.canvas.redo)
-        edit_menu.addAction(self.redo_action)
-
+        self.undo_action = QAction("撤销", self); self.undo_action.setShortcut(QKeySequence.StandardKey.Undo); self.undo_action.triggered.connect(self.canvas.undo); edit_menu.addAction(self.undo_action)
+        self.redo_action = QAction("重做", self); self.redo_action.setShortcut(QKeySequence.StandardKey.Redo); self.redo_action.triggered.connect(self.canvas.redo); edit_menu.addAction(self.redo_action)
         edit_menu.addSeparator()
 
-        # --- 新增复制粘贴菜单项 ---
-        self.copy_action = QAction("复制", self)
-        self.copy_action.setShortcut(QKeySequence.StandardKey.Copy)
-        self.copy_action.triggered.connect(self.canvas.copy_selected)
-        edit_menu.addAction(self.copy_action)
-
-        self.paste_action = QAction("粘贴", self)
-        self.paste_action.setShortcut(QKeySequence.StandardKey.Paste)
-        self.paste_action.triggered.connect(self.canvas.paste)
-        edit_menu.addAction(self.paste_action)
-        self.paste_in_place_action = QAction("原位粘贴", self)
-        self.paste_in_place_action.setShortcut("Ctrl+Shift+V")
-        self.paste_in_place_action.triggered.connect(self.canvas.paste_in_place)
-        edit_menu.addAction(self.paste_in_place_action)
-
-        # --- 连接信号以控制菜单项的可用状态 ---
+        self.copy_action = QAction("复制", self); self.copy_action.setShortcut(QKeySequence.StandardKey.Copy); self.copy_action.triggered.connect(self.canvas.copy_selected); edit_menu.addAction(self.copy_action)
+        self.paste_action = QAction("粘贴", self); self.paste_action.setShortcut(QKeySequence.StandardKey.Paste); self.paste_action.triggered.connect(self.canvas.paste); edit_menu.addAction(self.paste_action)
+        self.paste_in_place_action = QAction("原位粘贴", self); self.paste_in_place_action.setShortcut("Ctrl+Shift+V"); self.paste_in_place_action.triggered.connect(self.canvas.paste_in_place); edit_menu.addAction(self.paste_in_place_action)
+        
         self.canvas.selection_changed_signal.connect(self.copy_action.setEnabled)
         self.canvas.clipboard_changed_signal.connect(self.paste_action.setEnabled)
+        self.canvas.clipboard_changed_signal.connect(self.paste_in_place_action.setEnabled)
         self.canvas.undo_stack_changed.connect(self.undo_action.setEnabled)
         self.canvas.redo_stack_changed.connect(self.redo_action.setEnabled)
         
-        # --- 初始状态下禁用 ---
-        self.undo_action.setEnabled(False)
-        self.redo_action.setEnabled(False)
-        self.copy_action.setEnabled(False)
-        self.paste_action.setEnabled(False)
+        self.undo_action.setEnabled(False); self.redo_action.setEnabled(False); self.copy_action.setEnabled(False); self.paste_action.setEnabled(False); self.paste_in_place_action.setEnabled(False)
 
-        action_add_text = QAction("文本框", self)
-        action_add_text.triggered.connect(self.add_text)
-        insert_menu.addAction(action_add_text)
+        action_add_text = QAction("文本框", self); action_add_text.triggered.connect(self.add_text); insert_menu.addAction(action_add_text)
         insert_menu.addSeparator()
 
-        font_combo_action = QWidgetAction(self)
-        self.font_combo = QFontComboBox()
-        self.font_combo.currentFontChanged.connect(self.canvas.set_font)
-        font_combo_action.setDefaultWidget(self.font_combo)
-        insert_menu.addAction(font_combo_action)
+        font_combo_action = QWidgetAction(self); self.font_combo = QFontComboBox(); self.font_combo.currentFontChanged.connect(self.canvas.set_font); font_combo_action.setDefaultWidget(self.font_combo); insert_menu.addAction(font_combo_action)
+        font_size_action = QWidgetAction(self); self.font_size_spinbox = QSpinBox(); self.font_size_spinbox.setRange(1, 200); self.font_size_spinbox.setValue(24); self.font_size_spinbox.setPrefix("字号: "); self.font_size_spinbox.valueChanged.connect(self.canvas.set_font_size); font_size_action.setDefaultWidget(self.font_size_spinbox); insert_menu.addAction(font_size_action)
+        
+        reset_ui_action = QAction("重置界面布局", self); reset_ui_action.triggered.connect(self.reset_ui_layout); view_menu.addAction(reset_ui_action)
+        view_menu.addSeparator()
+        self.show_grid_action = QAction("显示网格", self); self.show_grid_action.setCheckable(True); self.show_grid_action.toggled.connect(self.canvas.toggle_grid); view_menu.addAction(self.show_grid_action)
+        self.show_guides_action = QAction("显示参考线", self)
+        self.show_guides_action.setCheckable(True)
+        self.show_guides_action.setChecked(True) # 默认开启
+        self.show_guides_action.toggled.connect(self.canvas.toggle_guides)
+        view_menu.addAction(self.show_guides_action)
 
-        font_size_action = QWidgetAction(self)
-        self.font_size_spinbox = QSpinBox()
-        self.font_size_spinbox.setRange(1, 200)
-        self.font_size_spinbox.setValue(24)
-        self.font_size_spinbox.setPrefix("字号: ")
-        self.font_size_spinbox.valueChanged.connect(self.canvas.set_font_size)
-        font_size_action.setDefaultWidget(self.font_size_spinbox)
-        insert_menu.addAction(font_size_action)
-
-        reset_ui_action = QAction("重置界面布局", self)
-        reset_ui_action.triggered.connect(self.reset_ui_layout)
-        view_menu.addAction(reset_ui_action)
-
-        action_export_png = QAction("导出为PNG...", self)
-        action_export_png.triggered.connect(self.canvas.export_as_png)
-        export_menu.addAction(action_export_png)
-
-        action_export_svg = QAction("导出为SVG...", self)
-        action_export_svg.triggered.connect(self.canvas.export_as_svg)
-        export_menu.addAction(action_export_svg)
+        self.snap_to_grid_action = QAction("吸附", self) # 名字改得更通用
+        self.snap_to_grid_action.setCheckable(True)
+        self.snap_to_grid_action.toggled.connect(self.canvas.toggle_snapping)
+        view_menu.addAction(self.snap_to_grid_action)
+        action_export_png = QAction("导出为PNG...", self); action_export_png.triggered.connect(self.canvas.export_as_png); export_menu.addAction(action_export_png)
+        action_export_svg = QAction("导出为SVG...", self); action_export_svg.triggered.connect(self.canvas.export_as_svg); export_menu.addAction(action_export_svg)
 
         # --- 工具栏 ---
         self.setDockOptions(QMainWindow.DockOption.AnimatedDocks | QMainWindow.DockOption.AllowNestedDocks)
-        self.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextUnderIcon)
-        self.draw_toolbar = QToolBar("绘图工具")
-        self.draw_toolbar.setIconSize(QSize(24, 24))
-        self.addToolBar(Qt.ToolBarArea.TopToolBarArea, self.draw_toolbar)
-        self.edit_attr_toolbar = QToolBar("功能与属性")
-        self.edit_attr_toolbar.setIconSize(QSize(24, 24))
-        self.addToolBar(Qt.ToolBarArea.TopToolBarArea, self.edit_attr_toolbar)
-        self.addToolBarBreak(Qt.ToolBarArea.TopToolBarArea)
+        
+        self.draw_toolbar = QToolBar("绘图工具"); self.draw_toolbar.setIconSize(QSize(24, 24)); self.addToolBar(Qt.ToolBarArea.LeftToolBarArea, self.draw_toolbar); self.draw_toolbar.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonIconOnly)
+        self.edit_attr_toolbar = QToolBar("功能与属性"); self.edit_attr_toolbar.setIconSize(QSize(24, 24)); self.addToolBar(Qt.ToolBarArea.TopToolBarArea, self.edit_attr_toolbar); self.edit_attr_toolbar.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextUnderIcon)
+        self.align_toolbar = QToolBar("对齐"); self.align_toolbar.setIconSize(QSize(24, 24)); self.addToolBar(Qt.ToolBarArea.TopToolBarArea, self.align_toolbar); self.align_toolbar.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextUnderIcon)
 
-        def create_action_with_icon(icon_name, text, parent):
+        def create_action_with_icon(icon_name, text, parent, tooltip=None):
             path = resource_path(os.path.join('icons', icon_name))
-            if os.path.exists(path):
-                return QAction(QIcon(path), text, parent)
-            else:
-                print(f"Warning: Icon not found at '{path}'")
-                return QAction(text, parent)
+            action = QAction(text, parent)
+            if os.path.exists(path): action.setIcon(QIcon(path))
+            else: print(f"Warning: Icon not found at '{path}'")
+            action.setToolTip(tooltip or text)
+            return action
 
         action_freehand = create_action_with_icon("draw.svg", "手绘", self); action_freehand.triggered.connect(lambda: self.canvas.set_tool("freehand")); self.draw_toolbar.addAction(action_freehand)
         self.draw_toolbar.addSeparator()
@@ -153,73 +114,58 @@ class MainWindow(QMainWindow):
         action_eraser = create_action_with_icon("eraser.svg", "橡皮擦", self); action_eraser.triggered.connect(lambda: self.canvas.set_tool("eraser")); self.edit_attr_toolbar.addAction(action_eraser)
         action_clear = create_action_with_icon("clear all.svg", "清空", self); action_clear.triggered.connect(self.canvas.clear_canvas); self.edit_attr_toolbar.addAction(action_clear)
         self.edit_attr_toolbar.addSeparator()
-
-        action_group = QAction("组合", self); action_group.setShortcut(QKeySequence("Ctrl+G")); action_group.triggered.connect(self.canvas.group_selected); self.edit_attr_toolbar.addAction(action_group)
-        action_ungroup = QAction("解组", self); action_ungroup.setShortcut(QKeySequence("Ctrl+Shift+G")); action_ungroup.triggered.connect(self.canvas.ungroup_selected); self.edit_attr_toolbar.addAction(action_ungroup)
+        action_group = QAction("组合", self); action_group.setShortcut("Ctrl+G"); action_group.triggered.connect(self.canvas.group_selected); self.edit_attr_toolbar.addAction(action_group)
+        action_ungroup = QAction("解组", self); action_ungroup.setShortcut("Ctrl+Shift+G"); action_ungroup.triggered.connect(self.canvas.ungroup_selected); self.edit_attr_toolbar.addAction(action_ungroup)
         self.edit_attr_toolbar.addSeparator()
-
         action_pen_color = create_action_with_icon("format_color_text.svg", "边框色", self); action_pen_color.triggered.connect(self.show_pen_color_dialog); self.edit_attr_toolbar.addAction(action_pen_color)
         action_fill_color = create_action_with_icon("palette.svg", "填充色", self); action_fill_color.triggered.connect(self.show_fill_color_dialog); self.edit_attr_toolbar.addAction(action_fill_color)
         action_no_fill = create_action_with_icon("format_color_reset.svg", "无填充", self); action_no_fill.triggered.connect(self.canvas.set_no_fill); self.edit_attr_toolbar.addAction(action_no_fill)
-        
-        action_paint_bucket = create_action_with_icon("paint_bucket.svg", "颜料桶", self)
-        action_paint_bucket.triggered.connect(lambda: self.canvas.set_tool("paint_bucket"))
-        self.edit_attr_toolbar.addAction(action_paint_bucket)
-        
+        action_paint_bucket = create_action_with_icon("paint_bucket.svg", "颜料桶", self); action_paint_bucket.triggered.connect(lambda: self.canvas.set_tool("paint_bucket")); self.edit_attr_toolbar.addAction(action_paint_bucket)
+        self.edit_attr_toolbar.addSeparator(); self.edit_attr_toolbar.addWidget(QLabel("填充:"))
+        self.combo_fill_style = QComboBox(); self.fill_styles = { "无": Qt.BrushStyle.NoBrush, "纯色": Qt.BrushStyle.SolidPattern, "水平": Qt.BrushStyle.HorPattern, "垂直": Qt.BrushStyle.VerPattern, "交叉": Qt.BrushStyle.CrossPattern, "斜线": Qt.BrushStyle.BDiagPattern, "反斜": Qt.BrushStyle.FDiagPattern, "斜叉": Qt.BrushStyle.DiagCrossPattern, "点1": Qt.BrushStyle.Dense1Pattern, "点2": Qt.BrushStyle.Dense4Pattern, "点3": Qt.BrushStyle.Dense7Pattern, }; [self.combo_fill_style.addItem(name, style) for name, style in self.fill_styles.items()]; self.combo_fill_style.activated.connect(self.on_fill_style_changed); self.edit_attr_toolbar.addWidget(self.combo_fill_style)
         self.edit_attr_toolbar.addSeparator()
-        self.edit_attr_toolbar.addWidget(QLabel("填充:"))
-        self.combo_fill_style = QComboBox()
-        self.fill_styles = {
-            "无": Qt.BrushStyle.NoBrush, "纯色": Qt.BrushStyle.SolidPattern,
-            "水平": Qt.BrushStyle.HorPattern, "垂直": Qt.BrushStyle.VerPattern,
-            "交叉": Qt.BrushStyle.CrossPattern, "斜线": Qt.BrushStyle.BDiagPattern,
-            "反斜": Qt.BrushStyle.FDiagPattern, "斜叉": Qt.BrushStyle.DiagCrossPattern,
-            "点1": Qt.BrushStyle.Dense1Pattern, "点2": Qt.BrushStyle.Dense4Pattern,
-            "点3": Qt.BrushStyle.Dense7Pattern,
-        }
-        for name, style in self.fill_styles.items():
-            self.combo_fill_style.addItem(name, style)
-        self.combo_fill_style.activated.connect(self.on_fill_style_changed)
-        self.edit_attr_toolbar.addWidget(self.combo_fill_style)
-        self.edit_attr_toolbar.addSeparator()
+        self.edit_attr_toolbar.addWidget(QLabel("线宽:")); self.spinbox_width = QSpinBox(); self.spinbox_width.setRange(1, 100); self.spinbox_width.setValue(2); self.spinbox_width.valueChanged.connect(self.canvas.set_pen_width); self.edit_attr_toolbar.addWidget(self.spinbox_width)
 
-        self.edit_attr_toolbar.addWidget(QLabel("线宽:"))
-        self.spinbox_width = QSpinBox()
-        self.spinbox_width.setRange(1, 100)
-        self.spinbox_width.setValue(2)
-        self.spinbox_width.valueChanged.connect(self.canvas.set_pen_width)
-        self.edit_attr_toolbar.addWidget(self.spinbox_width)
+        action_align_left = create_action_with_icon("align_left.svg", "左对齐", self); action_align_left.triggered.connect(lambda: self.canvas.align_selected_shapes('left')); self.align_toolbar.addAction(action_align_left)
+        action_align_center_h = create_action_with_icon("align_center_h.svg", "水平居中", self); action_align_center_h.triggered.connect(lambda: self.canvas.align_selected_shapes('center_h')); self.align_toolbar.addAction(action_align_center_h)
+        action_align_right = create_action_with_icon("align_right.svg", "右对齐", self); action_align_right.triggered.connect(lambda: self.canvas.align_selected_shapes('right')); self.align_toolbar.addAction(action_align_right)
+        self.align_toolbar.addSeparator()
+        action_align_top = create_action_with_icon("align_top.svg", "顶对齐", self); action_align_top.triggered.connect(lambda: self.canvas.align_selected_shapes('top')); self.align_toolbar.addAction(action_align_top)
+        action_align_center_v = create_action_with_icon("align_center_v.svg", "垂直居中", self); action_align_center_v.triggered.connect(lambda: self.canvas.align_selected_shapes('center_v')); self.align_toolbar.addAction(action_align_center_v)
+        action_align_bottom = create_action_with_icon("align_bottom.svg", "底对齐", self); action_align_bottom.triggered.connect(lambda: self.canvas.align_selected_shapes('bottom')); self.align_toolbar.addAction(action_align_bottom)
+        self.align_actions = self.align_toolbar.actions()
+        for action in self.align_actions: action.setEnabled(False)
+        self.canvas.selection_changed_signal.connect(self.update_align_actions)
 
         # --- 其他 ---
         self.layer_panel = LayerPanel(self); self.addDockWidget(Qt.DockWidgetArea.RightDockWidgetArea, self.layer_panel)
-        self.layer_panel.add_button.clicked.connect(self.canvas.add_layer)
-        self.layer_panel.remove_button.clicked.connect(self.canvas.remove_current_layer)
-        self.layer_panel.up_button.clicked.connect(self.canvas.move_layer_up)
-        self.layer_panel.down_button.clicked.connect(self.canvas.move_layer_down)
+        self.layer_panel.add_button.clicked.connect(self.canvas.add_layer); self.layer_panel.remove_button.clicked.connect(self.canvas.remove_current_layer); self.layer_panel.up_button.clicked.connect(self.canvas.move_layer_up); self.layer_panel.down_button.clicked.connect(self.canvas.move_layer_down)
         self.layer_panel.list_widget.currentRowChanged.connect(self.canvas.set_current_layer)
         self.canvas.layers_changed.connect(self.layer_panel.update_layer_list)
         self.canvas.initialize_layers()
         self.status_bar = self.statusBar(); self.mouse_pos_label = QLabel("坐标: (0, 0)"); self.status_bar.addPermanentWidget(self.mouse_pos_label)
         self.canvas.mouse_moved_signal.connect(self.update_mouse_pos)
 
+    def update_align_actions(self):
+        enable = len(self.canvas.selected_shapes) >= 2
+        for action in self.align_actions: action.setEnabled(enable)
+
     def reset_ui_layout(self):
-        self.addToolBar(Qt.ToolBarArea.TopToolBarArea, self.draw_toolbar)
+        self.addToolBar(Qt.ToolBarArea.LeftToolBarArea, self.draw_toolbar)
         self.addToolBar(Qt.ToolBarArea.TopToolBarArea, self.edit_attr_toolbar)
+        self.addToolBar(Qt.ToolBarArea.TopToolBarArea, self.align_toolbar)
         self.addDockWidget(Qt.DockWidgetArea.RightDockWidgetArea, self.layer_panel)
         self.layer_panel.setFloating(False)
-        for toolbar in self.findChildren(QToolBar):
-            toolbar.show()
+        for toolbar in self.findChildren(QToolBar): toolbar.show()
 
     def show_pen_color_dialog(self):
         color = QColorDialog.getColor(self.canvas.current_pen_color, self, "选择边框/文字颜色")
-        if color.isValid():
-            self.canvas.set_pen_color(color)
+        if color.isValid(): self.canvas.set_pen_color(color)
 
     def show_fill_color_dialog(self):
         initial_color = self.canvas.current_fill_color if self.canvas.current_fill_color else Qt.GlobalColor.white
         color = QColorDialog.getColor(initial_color, self, "选择填充颜色")
-        if color.isValid():
-            self.canvas.set_fill_color(color)
+        if color.isValid(): self.canvas.set_fill_color(color)
 
     def on_fill_style_changed(self, index):
         style = self.combo_fill_style.itemData(index)
@@ -237,21 +183,11 @@ if __name__ == '__main__':
     app.setStyle("Fusion")
     
     light_palette = QPalette()
-    light_palette.setColor(QPalette.ColorRole.Window, QColor(240, 240, 240))
-    light_palette.setColor(QPalette.ColorRole.WindowText, Qt.GlobalColor.black)
-    light_palette.setColor(QPalette.ColorRole.Base, Qt.GlobalColor.white)
-    light_palette.setColor(QPalette.ColorRole.AlternateBase, QColor(233, 233, 233))
-    light_palette.setColor(QPalette.ColorRole.ToolTipBase, Qt.GlobalColor.white)
-    light_palette.setColor(QPalette.ColorRole.ToolTipText, Qt.GlobalColor.black)
-    light_palette.setColor(QPalette.ColorRole.Text, Qt.GlobalColor.black)
-    light_palette.setColor(QPalette.ColorRole.Button, QColor(240, 240, 240))
-    light_palette.setColor(QPalette.ColorRole.ButtonText, Qt.GlobalColor.black)
-    light_palette.setColor(QPalette.ColorRole.BrightText, Qt.GlobalColor.red)
-    light_palette.setColor(QPalette.ColorRole.Link, QColor(42, 130, 218))
-    light_palette.setColor(QPalette.ColorRole.Highlight, QColor(42, 130, 218))
-    light_palette.setColor(QPalette.ColorRole.HighlightedText, Qt.GlobalColor.white)
+    light_palette.setColor(QPalette.ColorRole.Window, QColor(240, 240, 240)); light_palette.setColor(QPalette.ColorRole.WindowText, Qt.GlobalColor.black); light_palette.setColor(QPalette.ColorRole.Base, Qt.GlobalColor.white); light_palette.setColor(QPalette.ColorRole.AlternateBase, QColor(233, 233, 233)); light_palette.setColor(QPalette.ColorRole.ToolTipBase, Qt.GlobalColor.white); light_palette.setColor(QPalette.ColorRole.ToolTipText, Qt.GlobalColor.black); light_palette.setColor(QPalette.ColorRole.Text, Qt.GlobalColor.black); light_palette.setColor(QPalette.ColorRole.Button, QColor(240, 240, 240)); light_palette.setColor(QPalette.ColorRole.ButtonText, Qt.GlobalColor.black); light_palette.setColor(QPalette.ColorRole.BrightText, Qt.GlobalColor.red); light_palette.setColor(QPalette.ColorRole.Link, QColor(42, 130, 218)); light_palette.setColor(QPalette.ColorRole.Highlight, QColor(42, 130, 218)); light_palette.setColor(QPalette.ColorRole.HighlightedText, Qt.GlobalColor.white)
     app.setPalette(light_palette)
 
     window = MainWindow()
     window.show()
     sys.exit(app.exec())
+
+# --- END OF FILE main.py ---
