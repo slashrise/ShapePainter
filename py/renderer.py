@@ -1,7 +1,10 @@
+# --- START OF FILE renderer.py (Updated for Layer Effects) ---
+
 import math
 from typing import Union
 from PyQt6.QtWidgets import QWidget
-from PyQt6.QtGui import QPainter, QPen, QColor, QBrush, QPolygon, QPolygonF, QPainterPath
+from PyQt6.QtGui import (QPainter, QPen, QColor, QBrush, QPolygon, QPolygonF, 
+                         QPainterPath, QPixmap)
 from PyQt6.QtCore import Qt, QRect, QPoint, QPointF, QLineF, QRectF
 
 from shapes import (Text, Square, Ellipse, RoundedRectangle, Polygon, Circle, Rectangle,
@@ -13,49 +16,76 @@ AnyShape = Union[Text, Square, Ellipse, RoundedRectangle, Polygon, Circle, Recta
 class CanvasRenderer:
     @staticmethod
     def paint(painter: QPainter, canvas: QWidget):
-        CanvasRenderer.draw_layers(painter, canvas.layers, canvas.editing_shape)
+        """主绘制函数，先绘制所有图层，再绘制当前工具的预览。"""
+        CanvasRenderer.draw_layers(painter, canvas)
         if canvas.current_tool_obj:
             canvas.current_tool_obj.paint(painter)
 
     @staticmethod
-    def draw_layers(painter: QPainter, layers: list, editing_shape: AnyShape):
-        for layer in reversed(layers):
+    def draw_layers(painter: QPainter, canvas: QWidget):
+        """
+        使用离屏缓冲技术从下到上绘制所有可见图层，并应用每个图层的不透明度和混合模式。
+        """
+        for layer in reversed(canvas.layers):
             if not layer.is_visible:
                 continue
+
+            # 🔴 --- 修改开始 ---
+            # 1. 获取设备的像素比例 (例如，200%缩放时，值为2.0)
+            pixel_ratio = canvas.devicePixelRatioF()
+            
+            # 2. 创建一个物理像素足够多的高清临时画布
+            size = canvas.size() * pixel_ratio
+            layer_buffer = QPixmap(size)
+            # 告诉 QPixmap 它的“逻辑”分辨率是多少，这样它在绘制时就能正确缩放
+            layer_buffer.setDevicePixelRatio(pixel_ratio)
+            
+            # 3. 像之前一样填充为透明
+            layer_buffer.fill(Qt.GlobalColor.transparent)
+            # 🔴 --- 修改结束 ---
+
+            # 2. 在这个临时缓冲区上进行绘制 (现在是高清的了)
+            buffer_painter = QPainter(layer_buffer)
+            buffer_painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+
+            # ... 后续代码完全不变 ...
+            
             for shape in layer.shapes:
-                if shape == editing_shape:
+                if shape == canvas.editing_shape:
                     continue
-                CanvasRenderer._draw_shape_recursive(painter, shape)
+                CanvasRenderer._draw_shape_recursive(buffer_painter, shape)
+            
+            buffer_painter.end() 
+
+            painter.setOpacity(layer.opacity)
+            painter.setCompositionMode(layer.blend_mode)
+            # 这里绘制时，Qt会因为我们设置了 devicePixelRatio 而自动处理好缩放
+            painter.drawPixmap(0, 0, layer_buffer)
+
+        painter.setOpacity(1.0)
+        painter.setCompositionMode(QPainter.CompositionMode.CompositionMode_SourceOver)
 
     @staticmethod
     def _draw_shape_recursive(painter: QPainter, shape: AnyShape):
-        painter.save() # 保存当前状态
+        painter.save() 
 
-        # --- 新增逻辑：应用当前图形(可能是组合)的变换 ---
         bbox = shape.get_bounding_box()
         center = bbox.center()
         painter.translate(center)
         painter.scale(shape.scale_x, shape.scale_y)
         painter.rotate(shape.angle)
         painter.translate(-center)
-        # --- 结束新增 ---
         
         if isinstance(shape, ShapeGroup):
-            # 对于组合，我们已经应用了组合的变换，现在只需要画出它的子图形
-            # 注意：子图形自身的变换也需要被绘制，所以再次调用递归函数
             for sub_shape in shape.shapes:
-                # 再次调用递归，而不是直接调用 _draw_single_shape
                 CanvasRenderer._draw_shape_recursive(painter, sub_shape)
         else:
-            # 对于单个图形，我们不需要再应用变换，因为已经在上面应用过了
-            # 所以我们创建一个 "dummy_draw" 方法来跳过变换部分
             CanvasRenderer._draw_single_shape_no_transform(painter, shape)
 
-        painter.restore() # 恢复到调用前的状态
+        painter.restore() 
 
     @staticmethod
     def _draw_single_shape_no_transform(painter: QPainter, shape: AnyShape):
-        # 这是一个新的辅助方法，它只包含绘制逻辑，没有变换逻辑
         if isinstance(shape, Text):
             painter.setFont(shape.font)
             pen = QPen(shape.color)
@@ -123,3 +153,5 @@ class CanvasRenderer:
         arrow_head.append(QPointF(p_left_x, p_left_y))
         arrow_head.append(QPointF(p_right_x, p_right_y))
         painter.drawPolygon(arrow_head)
+
+# --- END OF FILE renderer.py ---

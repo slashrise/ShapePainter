@@ -1,5 +1,5 @@
 import copy
-from PyQt6.QtGui import QColor, QPolygonF, QPainterPath, QFont, QTransform
+from PyQt6.QtGui import QColor, QPolygonF, QPainterPath, QFont, QTransform, QPainter
 from PyQt6.QtCore import Qt, QRect, QPoint, QPointF
 
 class Layer:
@@ -8,11 +8,18 @@ class Layer:
         self.shapes = []
         self.is_visible = True
         self.is_locked = False
+        # 🔴 新增属性，并设置默认值
+        self.opacity = 1.0  # 范围 0.0 到 1.0
+        self.blend_mode = QPainter.CompositionMode.CompositionMode_SourceOver # 默认是正常模式
+
     def clone(self):
         new_layer = Layer(self.name)
         new_layer.is_visible = self.is_visible
         new_layer.is_locked = self.is_locked
         new_layer.shapes = [s.clone() for s in self.shapes]
+        # 🔴 克隆新增的属性
+        new_layer.opacity = self.opacity
+        new_layer.blend_mode = self.blend_mode
         return new_layer
 
 class PathSegment:

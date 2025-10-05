@@ -1,7 +1,7 @@
-# --- START OF FILE file_handler.py (Complete and Corrected) ---
+# --- START OF FILE file_handler.py (Updated for Layer Effects) ---
 
 import json
-from PyQt6.QtGui import QColor, QFont
+from PyQt6.QtGui import QColor, QFont, QPainter
 from PyQt6.QtCore import Qt, QRect, QPoint
 
 from shapes import *
@@ -66,7 +66,15 @@ class ProjectHandler:
                 if shape_dict:
                     shapes_data.append(shape_dict)
             
-            data_to_save.append({"name": layer.name, "is_visible": layer.is_visible, "is_locked": layer.is_locked, "shapes": shapes_data})
+            # 🔴 保存图层信息时，加入新属性
+            data_to_save.append({
+                "name": layer.name, 
+                "is_visible": layer.is_visible, 
+                "is_locked": layer.is_locked, 
+                "shapes": shapes_data,
+                "opacity": layer.opacity,
+                "blend_mode": int(layer.blend_mode) # 将枚举转为整数存储
+            })
         
         with open(file_path, 'w', encoding='utf-8') as f:
             json.dump(data_to_save, f, indent=4, ensure_ascii=False)
@@ -83,6 +91,11 @@ class ProjectHandler:
             new_layer.is_visible = layer_data.get("is_visible", True)
             new_layer.is_locked = layer_data.get("is_locked", False)
             
+            # 🔴 加载新属性，如果旧文件没有则使用默认值 (向后兼容)
+            new_layer.opacity = layer_data.get("opacity", 1.0)
+            default_mode = QPainter.CompositionMode.CompositionMode_SourceOver
+            new_layer.blend_mode = QPainter.CompositionMode(layer_data.get("blend_mode", int(default_mode)))
+
             for shape_data in layer_data["shapes"]:
                 pen_color = QColor(shape_data["color"])
                 width = shape_data.get("width", 2)
@@ -102,9 +115,8 @@ class ProjectHandler:
                 
                 elif shape_type == "path":
                     sub_paths = []
-                    # Handle old format (with "segments") and new format (with "sub_paths")
                     sub_paths_list_data = shape_data.get("sub_paths")
-                    if sub_paths_list_data is None: # Legacy format
+                    if sub_paths_list_data is None: 
                         sub_paths_list_data = [shape_data.get("segments", [])]
 
                     for sub_path_data in sub_paths_list_data:
@@ -116,7 +128,6 @@ class ProjectHandler:
                             node_type = seg_data.get("node_type", PathSegment.CORNER)
                             segments.append(PathSegment(anchor, handle1, handle2, node_type))
                         sub_paths.append(segments)
-                    # The 'is_closed' property is now dynamically calculated, so we don't load it from the file for Path
                     new_shape = Path(sub_paths, pen_color, width)
                 
                 elif shape_type == "polyline":
@@ -153,7 +164,7 @@ class ProjectHandler:
                     new_shape.angle = shape_data.get("angle", 0.0)
                     new_shape.scale_x = shape_data.get("scale_x", 1.0)
                     new_shape.scale_y = shape_data.get("scale_y", 1.0)
-                    if hasattr(new_shape, 'fill_color'): # Check again for shapes that might not have it
+                    if hasattr(new_shape, 'fill_color'):
                         new_shape.fill_color = fill_color
                         new_shape.fill_style = fill_style
                     
