@@ -1,5 +1,3 @@
-# --- START OF FILE layer_panel.py (Final Optimized Version) ---
-
 from PyQt6.QtWidgets import (QDockWidget, QListWidget, QListWidgetItem, QVBoxLayout,
                              QWidget, QPushButton, QHBoxLayout, QLabel, QLineEdit,
                              QSlider, QComboBox)
@@ -42,7 +40,8 @@ class LayerPanel(QDockWidget):
         
         self.name_editor = None
         self.editing_index = -1
-        
+        self.opacity_drag_start_values = {} # 用于记录拖动起始值
+
         self.blend_modes = {
             "正常": QPainter.CompositionMode.CompositionMode_SourceOver,
             "正片叠底": QPainter.CompositionMode.CompositionMode_Multiply,
@@ -79,10 +78,7 @@ class LayerPanel(QDockWidget):
             
             layer_name_label = QLabel(str(layer.name))
             
-            # 🔴 --- 修正点 ---
-            # 将解锁状态的图标从 " " 改为 "🔓"，使其始终可见
             lock_button = QPushButton("🔒" if layer.is_locked else "🔓")
-            # 🔴 --- 修正结束 ---
             lock_button.setFlat(True)
             lock_button.setFixedWidth(30)
             lock_button.clicked.connect(lambda checked=False, idx=i: self.main_window.canvas.toggle_layer_lock(idx))
@@ -112,8 +108,19 @@ class LayerPanel(QDockWidget):
             opacity_slider = QSlider(Qt.Orientation.Horizontal)
             opacity_slider.setRange(0, 100)
             opacity_slider.setValue(int(layer.opacity * 100))
+            
+            # 🔴 --- 核心修改：分离信号连接 ---
+            # 连接实时预览信号
             opacity_slider.valueChanged.connect(
-                lambda value, idx=i: self.main_window.canvas.set_layer_opacity(idx, value)
+                lambda value, idx=i: self.main_window.canvas.preview_layer_opacity(idx, value)
+            )
+            # 连接按下信号，记录初始值
+            opacity_slider.sliderPressed.connect(
+                lambda idx=i, s=opacity_slider: self.on_slider_pressed(idx, s.value())
+            )
+            # 连接释放信号，提交最终更改
+            opacity_slider.sliderReleased.connect(
+                lambda idx=i: self.on_slider_released(idx)
             )
 
             bottom_row_layout.addWidget(blend_combo)
@@ -135,6 +142,14 @@ class LayerPanel(QDockWidget):
             self.list_widget.setCurrentRow(current_layer_index)
             
         self.list_widget.currentRowChanged.connect(self.main_window.canvas.set_current_layer)
+
+    def on_slider_pressed(self, index, value):
+        self.opacity_drag_start_values[index] = value
+
+    def on_slider_released(self, index):
+        if index in self.opacity_drag_start_values:
+            original_value = self.opacity_drag_start_values.pop(index)
+            self.main_window.canvas.commit_layer_opacity_change(index, original_value)
 
     def on_item_double_clicked(self, item):
         index = self.list_widget.row(item)
@@ -171,5 +186,3 @@ class LayerPanel(QDockWidget):
             self.editing_index = -1
             
             self.main_window.canvas.setFocus()
-
-# --- END OF FILE layer_panel.py ---

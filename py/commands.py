@@ -183,3 +183,24 @@ class CompositeCommand(Command):
         # Redo commands in normal order
         for cmd in self.commands:
             cmd.redo()
+
+class ModifyPathCommand(Command):
+    """
+    一个用于修改 Path 对象内部结构的命令（如添加/删除节点）。
+    它通过保存整个 sub_paths 列表的快照来实现撤销/重做。
+    """
+    def __init__(self, path_shape, old_sub_paths, new_sub_paths):
+        self.path_shape = path_shape
+        # 使用深拷贝确保我们保存的是值的快照，而不是引用
+        self.old_sub_paths = [
+            [seg.clone() for seg in sp] for sp in old_sub_paths
+        ]
+        self.new_sub_paths = [
+            [seg.clone() for seg in sp] for sp in new_sub_paths
+        ]
+
+    def undo(self):
+        self.path_shape.sub_paths = self.old_sub_paths
+
+    def redo(self):
+        self.path_shape.sub_paths = self.new_sub_paths

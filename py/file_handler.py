@@ -1,5 +1,3 @@
-# --- START OF FILE file_handler.py (Updated for Layer Effects) ---
-
 import json
 from PyQt6.QtGui import QColor, QFont, QPainter
 from PyQt6.QtCore import Qt, QRect, QPoint
@@ -22,16 +20,25 @@ class ProjectHandler:
                     "scale_x": shape.scale_x,
                     "scale_y": shape.scale_y
                 }
-                if hasattr(shape, 'fill_color'):
+                if hasattr(shape, 'fill_color') and shape.fill_style is not None:
                     common_attrs["fill_color"] = shape.fill_color.name() if shape.fill_color else None
-                    common_attrs["fill_style"] = int(shape.fill_style)
+                    common_attrs["fill_style"] = shape.fill_style.value
                 
                 if isinstance(shape, Text):
-                    shape_dict = {"type": "text", "rect": [shape.rect.x(), shape.rect.y(), shape.rect.width(), shape.rect.height()], "text": shape.text, "font_family": shape.font.family(), "font_size": shape.font.pointSize(), "color": shape.color.name(), "has_border": shape.has_border, "border_color": shape.border_color.name()}
+                    shape_dict = {
+                        "type": "text", 
+                        "rect": [shape.rect.x(), shape.rect.y(), shape.rect.width(), shape.rect.height()], 
+                        "text": shape.text,
+                        "font_family": shape.font.family(), 
+                        "font_size": shape.font.pointSize(), 
+                        "color": shape.color.name(), 
+                        "has_border": shape.has_border, 
+                        "border_color": shape.border_color.name(),
+                        "alignment": int(shape.alignment)
+                    }
                     shape_dict.update(common_attrs)
                 elif isinstance(shape, Arrow):
                     shape_dict = {"type": "arrow", "p1": [shape.p1.x(), shape.p1.y()], "p2": [shape.p2.x(), shape.p2.y()], **common_attrs}
-                
                 elif isinstance(shape, Path):
                     sub_paths_data = []
                     for sub_path in shape.sub_paths:
@@ -45,9 +52,9 @@ class ProjectHandler:
                             })
                         sub_paths_data.append(segments_data)
                     shape_dict = {"type": "path", "sub_paths": sub_paths_data, **common_attrs}
-                
                 elif isinstance(shape, (Polyline, Polygon)):
-                    points_data = [[p.x(), p.y()] for p in shape.points]; shape_dict = {"type": "polyline" if isinstance(shape, Polyline) else "polygon", "points": points_data, **common_attrs}
+                    points_data = [[p.x(), p.y()] for p in shape.points]
+                    shape_dict = {"type": "polyline" if isinstance(shape, Polyline) else "polygon", "points": points_data, **common_attrs}
                 elif isinstance(shape, Point):
                     shape_dict = {"type": "point", "pos": [shape.pos.x(), shape.pos.y()], **common_attrs}
                 elif isinstance(shape, Line):
@@ -66,14 +73,13 @@ class ProjectHandler:
                 if shape_dict:
                     shapes_data.append(shape_dict)
             
-            # 🔴 保存图层信息时，加入新属性
             data_to_save.append({
                 "name": layer.name, 
                 "is_visible": layer.is_visible, 
                 "is_locked": layer.is_locked, 
                 "shapes": shapes_data,
                 "opacity": layer.opacity,
-                "blend_mode": int(layer.blend_mode) # 将枚举转为整数存储
+                "blend_mode": layer.blend_mode.value
             })
         
         with open(file_path, 'w', encoding='utf-8') as f:
@@ -90,35 +96,42 @@ class ProjectHandler:
             new_layer = Layer(layer_data["name"])
             new_layer.is_visible = layer_data.get("is_visible", True)
             new_layer.is_locked = layer_data.get("is_locked", False)
-            
-            # 🔴 加载新属性，如果旧文件没有则使用默认值 (向后兼容)
             new_layer.opacity = layer_data.get("opacity", 1.0)
             default_mode = QPainter.CompositionMode.CompositionMode_SourceOver
-            new_layer.blend_mode = QPainter.CompositionMode(layer_data.get("blend_mode", int(default_mode)))
+            
+            # 🔴 --- 核心修复：在这里也使用 .value ---
+            blend_mode_val = layer_data.get("blend_mode", default_mode.value)
+            
+            try:
+                new_layer.blend_mode = QPainter.CompositionMode(blend_mode_val)
+            except (ValueError, TypeError): # 增加 TypeError 以防万一
+                new_layer.blend_mode = default_mode
 
             for shape_data in layer_data["shapes"]:
                 pen_color = QColor(shape_data["color"])
                 width = shape_data.get("width", 2)
                 fill_color_name = shape_data.get("fill_color")
                 fill_color = QColor(fill_color_name) if fill_color_name else None
-                fill_style_val = shape_data.get("fill_style", int(Qt.BrushStyle.NoBrush))
+                fill_style_val = shape_data.get("fill_style", Qt.BrushStyle.NoBrush.value)
                 fill_style = Qt.BrushStyle(fill_style_val)
 
                 new_shape = None
                 shape_type = shape_data.get("type")
 
                 if shape_type == "text":
-                    r = shape_data["rect"]; rect = QRect(r[0], r[1], r[2], r[3])
+                    r = shape_data["rect"]
+                    rect = QRect(r[0], r[1], r[2], r[3])
                     font = QFont(shape_data.get("font_family", "Arial"), shape_data.get("font_size", 20))
-                    has_border = shape_data.get("has_border", False); border_color = QColor(shape_data.get("border_color", "#000000"))
-                    new_shape = Text(rect, shape_data["text"], font, pen_color, has_border, border_color)
+                    has_border = shape_data.get("has_border", False)
+                    border_color = QColor(shape_data.get("border_color", "#000000"))
+                    alignment = Qt.AlignmentFlag(shape_data.get("alignment", Qt.AlignmentFlag.AlignLeft.value))
+                    new_shape = Text(rect, shape_data["text"], font, pen_color, has_border, border_color, alignment)
                 
                 elif shape_type == "path":
                     sub_paths = []
                     sub_paths_list_data = shape_data.get("sub_paths")
                     if sub_paths_list_data is None: 
                         sub_paths_list_data = [shape_data.get("segments", [])]
-
                     for sub_path_data in sub_paths_list_data:
                         segments = []
                         for seg_data in sub_path_data:
@@ -173,5 +186,3 @@ class ProjectHandler:
             loaded_layers.append(new_layer)
             
         return loaded_layers
-        
-# --- END OF FILE file_handler.py ---
