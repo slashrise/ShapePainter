@@ -7,6 +7,7 @@ from shapes import *
 from commands import (AddShapeCommand, RemoveShapesCommand, MoveShapesCommand,
                       ScaleCommand, ChangePropertiesCommand, RotateCommand, FlipCommand, ModifyNodeCommand,
                       CompositeCommand, ModifyPathCommand)
+from renderer import CanvasRenderer
 
 class Tool:
     def __init__(self, canvas): self.canvas = canvas
@@ -847,12 +848,12 @@ class PointTool(Tool):
 
 class LineTool(BaseDrawingTool):
     def create_shape(self): return Line(self.start_point, self.end_point, self.canvas.current_pen_color, self.canvas.current_width)
-    def draw_preview(self, painter): painter.drawLine(self.start_point, self.end_point)
+    def draw_preview(self, painter):
+        self.canvas._draw_arrow(painter, self.start_point, self.end_point, self.canvas.current_pen_color, self.canvas.current_width)
 
 class ArrowTool(BaseDrawingTool):
     def create_shape(self): return Arrow(self.start_point, self.end_point, self.canvas.current_pen_color, self.canvas.current_width)
-    def draw_preview(self, painter): self.canvas._draw_arrow(painter, self.start_point, self.end_point, self.canvas.current_pen_color, self.canvas.current_width)
-
+    def draw_preview(self, painter): CanvasRenderer.draw_arrow(painter, self.start_point, self.end_point, self.canvas.current_pen_color, self.canvas.current_width)
 class RectangleTool(BaseDrawingTool):
     def create_shape(self): rect = QRect(self.start_point, self.end_point).normalized(); return Rectangle(rect.topLeft(), rect.bottomRight(), self.canvas.current_pen_color, self.canvas.current_width, self.canvas.current_fill_color, self.canvas.current_fill_style)
     def draw_preview(self, painter): painter.drawRect(QRect(self.start_point, self.end_point).normalized())

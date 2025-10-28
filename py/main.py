@@ -17,13 +17,17 @@ from tools import PenTool
 def resource_path(relative_path):
     """
     获取资源的绝对路径, 兼容开发模式和 PyInstaller 打包后的模式。
+    这是一个健壮的最终版本。
     """
     if getattr(sys, 'frozen', False) and hasattr(sys, '_MEIPASS'):
         # 如果是 PyInstaller 打包后的 .exe
+        # 此时，资源文件与可执行文件在同一个临时目录 _MEIPASS 下
         base_path = sys._MEIPASS
     else:
         # 如果是在开发环境中运行 .py
-        base_path = os.path.dirname(os.path.abspath(__file__))
+        # __file__ 指向当前脚本 (e.g., .../ShapePainter/py/main.py)
+        # 我们需要的是项目根目录 (ShapePainter)
+        base_path = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     return os.path.join(base_path, relative_path)
 
 
@@ -33,7 +37,8 @@ class MainWindow(QMainWindow):
         self.setWindowTitle('我的绘图系统 - ShapePainter')
         self.setGeometry(200, 200, 1400, 800)
 
-        app_icon_path = resource_path("../icons/mouse pointer.svg")
+        # 🔴 核心修改：简化图标路径调用
+        app_icon_path = resource_path("icons/mouse pointer.svg")
         if os.path.exists(app_icon_path):
             self.setWindowIcon(QIcon(app_icon_path))
 
@@ -48,10 +53,11 @@ class MainWindow(QMainWindow):
         self._connect_signals()
         self._create_docks_and_statusbar()
         self._apply_initial_settings()
+        self.canvas.set_raster_algorithm(self.algo_combo.currentText())
         
-        # 🔴 核心修改：使用 QTimer.singleShot 来确保主窗口显示后再弹出说明书
         if self.settings.get("show_manual_on_startup", True):
             QTimer.singleShot(0, lambda: self.show_user_manual(is_startup=True))
+
 
     def _create_menus(self):
         menu_bar = self.menuBar()
@@ -156,31 +162,223 @@ class MainWindow(QMainWindow):
     def _create_toolbars(self):
         self.setDockOptions(QMainWindow.DockOption.AnimatedDocks | QMainWindow.DockOption.AllowNestedDocks)
 
-        self.draw_toolbar = QToolBar("绘图工具"); self.draw_toolbar.setIconSize(QSize(24, 24)); self.addToolBar(Qt.ToolBarArea.LeftToolBarArea, self.draw_toolbar); self.draw_toolbar.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonIconOnly)
-        self.edit_attr_toolbar = QToolBar("功能与属性"); self.edit_attr_toolbar.setIconSize(QSize(24, 24)); self.addToolBar(Qt.ToolBarArea.TopToolBarArea, self.edit_attr_toolbar); self.edit_attr_toolbar.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextUnderIcon)
-        self.align_toolbar = QToolBar("对齐"); self.align_toolbar.setIconSize(QSize(24, 24)); self.addToolBar(Qt.ToolBarArea.TopToolBarArea, self.align_toolbar); self.align_toolbar.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextUnderIcon)
-        self.text_format_toolbar = QToolBar("文本格式"); self.text_format_toolbar.setIconSize(QSize(24, 24)); self.addToolBar(Qt.ToolBarArea.TopToolBarArea, self.text_format_toolbar); self.text_format_toolbar.setVisible(False)
+        # --- 1. 创建工具栏实例 ---
+        self.draw_toolbar = QToolBar("绘图工具")
+        self.draw_toolbar.setIconSize(QSize(24, 24))
+        self.addToolBar(Qt.ToolBarArea.LeftToolBarArea, self.draw_toolbar)
+        self.draw_toolbar.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonIconOnly)
 
+        self.edit_attr_toolbar = QToolBar("功能与属性")
+        self.edit_attr_toolbar.setIconSize(QSize(24, 24))
+        self.addToolBar(Qt.ToolBarArea.TopToolBarArea, self.edit_attr_toolbar)
+        self.edit_attr_toolbar.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextUnderIcon)
+
+        self.align_toolbar = QToolBar("对齐")
+        self.align_toolbar.setIconSize(QSize(24, 24))
+        self.addToolBar(Qt.ToolBarArea.TopToolBarArea, self.align_toolbar)
+        self.align_toolbar.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextUnderIcon)
+
+        self.text_format_toolbar = QToolBar("文本格式")
+        self.text_format_toolbar.setIconSize(QSize(24, 24))
+        self.addToolBar(Qt.ToolBarArea.TopToolBarArea, self.text_format_toolbar)
+        self.text_format_toolbar.setVisible(False)
+
+        # --- 2. 创建一个辅助函数来加载图标 ---
         def create_action_with_icon(icon_name, text, parent, tooltip=None):
-            path = resource_path(os.path.join("../icons", icon_name))
+            path = resource_path(os.path.join("icons", icon_name))
             action = QAction(text, parent)
-            if os.path.exists(path): action.setIcon(QIcon(path))
-            else: print(f"Warning: Icon not found at '{path}'")
+            if os.path.exists(path):
+                action.setIcon(QIcon(path))
+            else:
+                print(f"Warning: Icon not found at '{path}'")
             action.setToolTip(tooltip or text)
             return action
 
-        action_freehand = create_action_with_icon("draw.svg", "手绘", self); action_freehand.triggered.connect(lambda: self.canvas.set_tool("freehand")); self.draw_toolbar.addAction(action_freehand)
-        self.draw_toolbar.addSeparator(); action_point = create_action_with_icon("point.svg", "画点", self); action_point.triggered.connect(lambda: self.canvas.set_tool("point")); self.draw_toolbar.addAction(action_point); action_line = create_action_with_icon("remove.svg", "画直线", self); action_line.triggered.connect(lambda: self.canvas.set_tool("line")); self.draw_toolbar.addAction(action_line); action_arrow = create_action_with_icon("arrow.svg", "箭头", self); action_arrow.triggered.connect(lambda: self.canvas.set_tool("arrow")); self.draw_toolbar.addAction(action_arrow); action_rect = create_action_with_icon("rectangle.svg", "画矩形", self); action_rect.triggered.connect(lambda: self.canvas.set_tool("rect")); self.draw_toolbar.addAction(action_rect); action_square = create_action_with_icon("square.svg", "画正方形", self); action_square.triggered.connect(lambda: self.canvas.set_tool("square")); self.draw_toolbar.addAction(action_square); action_circle = create_action_with_icon("circle.svg", "画圆形", self); action_circle.triggered.connect(lambda: self.canvas.set_tool("circle")); self.draw_toolbar.addAction(action_circle); action_ellipse = create_action_with_icon("ellipse.svg", "画椭圆", self); action_ellipse.triggered.connect(lambda: self.canvas.set_tool("ellipse")); self.draw_toolbar.addAction(action_ellipse); action_rounded_rect = create_action_with_icon("rounded rectangle.svg", "画圆角矩形", self); action_rounded_rect.triggered.connect(lambda: self.canvas.set_tool("rounded_rect")); self.draw_toolbar.addAction(action_rounded_rect); action_polygon = create_action_with_icon("pentagon.svg", "画多边形", self); action_polygon.triggered.connect(lambda: self.canvas.set_tool("polygon")); self.draw_toolbar.addAction(action_polygon); action_polyline = create_action_with_icon("polyline.svg", "画折线", self); action_polyline.triggered.connect(lambda: self.canvas.set_tool("polyline")); self.draw_toolbar.addAction(action_polyline); action_pen = create_action_with_icon("line_curve.svg", "贝塞尔曲线", self); action_pen.triggered.connect(lambda: self.canvas.set_tool("pen")); self.draw_toolbar.addAction(action_pen)
-        action_select = create_action_with_icon("mouse pointer.svg", "选择", self); action_select.triggered.connect(lambda: self.canvas.set_tool("select")); self.edit_attr_toolbar.addAction(action_select); action_eraser = create_action_with_icon("eraser.svg", "橡皮擦", self); action_eraser.triggered.connect(lambda: self.canvas.set_tool("eraser")); self.edit_attr_toolbar.addAction(action_eraser); action_clear = create_action_with_icon("clear all.svg", "清空", self); action_clear.triggered.connect(self.canvas.clear_canvas); self.edit_attr_toolbar.addAction(action_clear); self.edit_attr_toolbar.addSeparator(); action_group = QAction("组合", self); action_group.setShortcut("Ctrl+G"); action_group.triggered.connect(self.canvas.group_selected); self.edit_attr_toolbar.addAction(action_group); action_ungroup = QAction("解组", self); action_ungroup.setShortcut("Ctrl+Shift+G"); action_ungroup.triggered.connect(self.canvas.ungroup_selected); self.edit_attr_toolbar.addAction(action_ungroup); self.edit_attr_toolbar.addSeparator(); action_pen_color = create_action_with_icon("format_color_text.svg", "边框色", self); action_pen_color.triggered.connect(self.show_pen_color_dialog); self.edit_attr_toolbar.addAction(action_pen_color); action_fill_color = create_action_with_icon("palette.svg", "填充色", self); action_fill_color.triggered.connect(self.show_fill_color_dialog); self.edit_attr_toolbar.addAction(action_fill_color); action_canvas_color = create_action_with_icon("background.svg", "画布颜色", self); action_canvas_color.triggered.connect(self.show_canvas_color_dialog); self.edit_attr_toolbar.addAction(action_canvas_color); action_no_fill = create_action_with_icon("format_color_reset.svg", "无填充", self); action_no_fill.triggered.connect(self.canvas.set_no_fill); self.edit_attr_toolbar.addAction(action_no_fill); action_paint_bucket = create_action_with_icon("paint_bucket.svg", "颜料桶", self); action_paint_bucket.triggered.connect(lambda: self.canvas.set_tool("paint_bucket")); self.edit_attr_toolbar.addAction(action_paint_bucket); self.edit_attr_toolbar.addSeparator(); self.edit_attr_toolbar.addWidget(QLabel("填充:")); self.combo_fill_style = QComboBox(); self.fill_styles = { "无": Qt.BrushStyle.NoBrush, "纯色": Qt.BrushStyle.SolidPattern, "水平": Qt.BrushStyle.HorPattern, "垂直": Qt.BrushStyle.VerPattern, "交叉": Qt.BrushStyle.CrossPattern, "斜线": Qt.BrushStyle.BDiagPattern, "反斜": Qt.BrushStyle.FDiagPattern, "斜叉": Qt.BrushStyle.DiagCrossPattern, "点1": Qt.BrushStyle.Dense1Pattern, "点2": Qt.BrushStyle.Dense4Pattern, "点3": Qt.BrushStyle.Dense7Pattern, }; [self.combo_fill_style.addItem(name, style) for name, style in self.fill_styles.items()]; self.combo_fill_style.activated.connect(self.on_fill_style_changed); self.edit_attr_toolbar.addWidget(self.combo_fill_style); self.edit_attr_toolbar.addSeparator(); self.edit_attr_toolbar.addWidget(QLabel("线宽:")); self.spinbox_width = QSpinBox(); self.spinbox_width.setRange(1, 100); self.spinbox_width.valueChanged.connect(self.canvas.set_pen_width); self.edit_attr_toolbar.addWidget(self.spinbox_width)
-        action_align_left = create_action_with_icon("align_left.svg", "左对齐", self); action_align_left.triggered.connect(lambda: self.canvas.align_selected_shapes('left')); self.align_toolbar.addAction(action_align_left); action_align_center_h = create_action_with_icon("align_center_h.svg", "水平居中", self); action_align_center_h.triggered.connect(lambda: self.canvas.align_selected_shapes('center_h')); self.align_toolbar.addAction(action_align_center_h); action_align_right = create_action_with_icon("align_right.svg", "右对齐", self); action_align_right.triggered.connect(lambda: self.canvas.align_selected_shapes('right')); self.align_toolbar.addAction(action_align_right); self.align_toolbar.addSeparator(); action_align_top = create_action_with_icon("align_top.svg", "顶对齐", self); action_align_top.triggered.connect(lambda: self.canvas.align_selected_shapes('top')); self.align_toolbar.addAction(action_align_top); action_align_center_v = create_action_with_icon("align_center_v.svg", "垂直居中", self); action_align_center_v.triggered.connect(lambda: self.canvas.align_selected_shapes('center_v')); self.align_toolbar.addAction(action_align_center_v); action_align_bottom = create_action_with_icon("align_bottom.svg", "底对齐", self); action_align_bottom.triggered.connect(lambda: self.canvas.align_selected_shapes('bottom')); self.align_toolbar.addAction(action_align_bottom)
-        self.align_actions = self.align_toolbar.actions()
-        self.action_bold = create_action_with_icon("bold.svg", "粗体", self); self.action_bold.setCheckable(True); self.action_bold.triggered.connect(self.handle_text_bold_toggle); self.text_format_toolbar.addAction(self.action_bold)
-        self.action_italic = create_action_with_icon("italic.svg", "斜体", self); self.action_italic.setCheckable(True); self.action_italic.triggered.connect(self.handle_text_italic_toggle); self.text_format_toolbar.addAction(self.action_italic)
-        self.text_format_toolbar.addSeparator()
-        self.action_align_left_text = create_action_with_icon("align_left.svg", "文本左对齐", self); self.action_align_left_text.triggered.connect(lambda: self.handle_text_alignment(Qt.AlignmentFlag.AlignLeft)); self.text_format_toolbar.addAction(self.action_align_left_text)
-        self.action_align_center_text = create_action_with_icon("align_center_h.svg", "文本居中对齐", self); self.action_align_center_text.triggered.connect(lambda: self.handle_text_alignment(Qt.AlignmentFlag.AlignHCenter)); self.text_format_toolbar.addAction(self.action_align_center_text)
-        self.action_align_right_text = create_action_with_icon("align_right.svg", "文本右对齐", self); self.action_align_right_text.triggered.connect(lambda: self.handle_text_alignment(Qt.AlignmentFlag.AlignRight)); self.text_format_toolbar.addAction(self.action_align_right_text)
+        # --- 3. 向【绘图工具栏】添加动作 ---
+        action_select = create_action_with_icon("mouse pointer.svg", "选择", self)
+        action_select.triggered.connect(lambda: self.canvas.set_tool("select"))
+        self.draw_toolbar.addAction(action_select)
+        
+        self.draw_toolbar.addSeparator()
 
+        action_pen = create_action_with_icon("line_curve.svg", "贝塞尔曲线", self)
+        action_pen.triggered.connect(lambda: self.canvas.set_tool("pen"))
+        self.draw_toolbar.addAction(action_pen)
+
+        action_freehand = create_action_with_icon("draw.svg", "手绘", self)
+        action_freehand.triggered.connect(lambda: self.canvas.set_tool("freehand"))
+        self.draw_toolbar.addAction(action_freehand)
+        
+        self.draw_toolbar.addSeparator()
+
+        action_point = create_action_with_icon("point.svg", "画点", self)
+        action_point.triggered.connect(lambda: self.canvas.set_tool("point"))
+        self.draw_toolbar.addAction(action_point)
+
+        action_line = create_action_with_icon("remove.svg", "画直线", self)
+        action_line.triggered.connect(lambda: self.canvas.set_tool("line"))
+        self.draw_toolbar.addAction(action_line)
+        
+        action_arrow = create_action_with_icon("arrow.svg", "箭头", self)
+        action_arrow.triggered.connect(lambda: self.canvas.set_tool("arrow"))
+        self.draw_toolbar.addAction(action_arrow)
+        
+        action_rect = create_action_with_icon("rectangle.svg", "画矩形", self)
+        action_rect.triggered.connect(lambda: self.canvas.set_tool("rect"))
+        self.draw_toolbar.addAction(action_rect)
+        
+        action_square = create_action_with_icon("square.svg", "画正方形", self)
+        action_square.triggered.connect(lambda: self.canvas.set_tool("square"))
+        self.draw_toolbar.addAction(action_square)
+        
+        action_circle = create_action_with_icon("circle.svg", "画圆形", self)
+        action_circle.triggered.connect(lambda: self.canvas.set_tool("circle"))
+        self.draw_toolbar.addAction(action_circle)
+        
+        action_ellipse = create_action_with_icon("ellipse.svg", "画椭圆", self)
+        action_ellipse.triggered.connect(lambda: self.canvas.set_tool("ellipse"))
+        self.draw_toolbar.addAction(action_ellipse)
+        
+        action_rounded_rect = create_action_with_icon("rounded rectangle.svg", "画圆角矩形", self)
+        action_rounded_rect.triggered.connect(lambda: self.canvas.set_tool("rounded_rect"))
+        self.draw_toolbar.addAction(action_rounded_rect)
+        
+        action_polygon = create_action_with_icon("pentagon.svg", "画多边形", self)
+        action_polygon.triggered.connect(lambda: self.canvas.set_tool("polygon"))
+        self.draw_toolbar.addAction(action_polygon)
+        
+        action_polyline = create_action_with_icon("polyline.svg", "画折线", self)
+        action_polyline.triggered.connect(lambda: self.canvas.set_tool("polyline"))
+        self.draw_toolbar.addAction(action_polyline)
+        
+        # --- 4. 向【功能与属性工具栏】添加动作 ---
+        action_eraser = create_action_with_icon("eraser.svg", "橡皮擦", self)
+        action_eraser.triggered.connect(lambda: self.canvas.set_tool("eraser"))
+        self.edit_attr_toolbar.addAction(action_eraser)
+
+        action_clear = create_action_with_icon("clear all.svg", "清空", self)
+        action_clear.triggered.connect(self.canvas.clear_canvas)
+        self.edit_attr_toolbar.addAction(action_clear)
+        
+        self.edit_attr_toolbar.addSeparator()
+        
+        action_group = QAction("组合", self)
+        action_group.setShortcut("Ctrl+G")
+        action_group.triggered.connect(self.canvas.group_selected)
+        self.edit_attr_toolbar.addAction(action_group)
+        
+        action_ungroup = QAction("解组", self)
+        action_ungroup.setShortcut("Ctrl+Shift+G")
+        action_ungroup.triggered.connect(self.canvas.ungroup_selected)
+        self.edit_attr_toolbar.addAction(action_ungroup)
+        
+        self.edit_attr_toolbar.addSeparator()
+        
+        action_pen_color = create_action_with_icon("format_color_text.svg", "边框色", self)
+        action_pen_color.triggered.connect(self.show_pen_color_dialog)
+        self.edit_attr_toolbar.addAction(action_pen_color)
+        
+        action_fill_color = create_action_with_icon("palette.svg", "填充色", self)
+        action_fill_color.triggered.connect(self.show_fill_color_dialog)
+        self.edit_attr_toolbar.addAction(action_fill_color)
+        
+        action_canvas_color = create_action_with_icon("background.svg", "画布颜色", self)
+        action_canvas_color.triggered.connect(self.show_canvas_color_dialog)
+        self.edit_attr_toolbar.addAction(action_canvas_color)
+        
+        action_no_fill = create_action_with_icon("format_color_reset.svg", "无填充", self)
+        action_no_fill.triggered.connect(self.canvas.set_no_fill)
+        self.edit_attr_toolbar.addAction(action_no_fill)
+        
+        action_paint_bucket = create_action_with_icon("paint_bucket.svg", "颜料桶", self)
+        action_paint_bucket.triggered.connect(lambda: self.canvas.set_tool("paint_bucket"))
+        self.edit_attr_toolbar.addAction(action_paint_bucket)
+        
+        self.edit_attr_toolbar.addSeparator()
+        
+        self.edit_attr_toolbar.addWidget(QLabel("填充:"))
+        self.combo_fill_style = QComboBox()
+        self.fill_styles = {
+            "无": Qt.BrushStyle.NoBrush, "纯色": Qt.BrushStyle.SolidPattern, "水平": Qt.BrushStyle.HorPattern,
+            "垂直": Qt.BrushStyle.VerPattern, "交叉": Qt.BrushStyle.CrossPattern, "斜线": Qt.BrushStyle.BDiagPattern,
+            "反斜": Qt.BrushStyle.FDiagPattern, "斜叉": Qt.BrushStyle.DiagCrossPattern, "点1": Qt.BrushStyle.Dense1Pattern,
+            "点2": Qt.BrushStyle.Dense4Pattern, "点3": Qt.BrushStyle.Dense7Pattern,
+        }
+        for name, style in self.fill_styles.items():
+            self.combo_fill_style.addItem(name, style)
+        self.combo_fill_style.activated.connect(self.on_fill_style_changed)
+        self.edit_attr_toolbar.addWidget(self.combo_fill_style)
+        
+        self.edit_attr_toolbar.addSeparator()
+        
+        self.edit_attr_toolbar.addWidget(QLabel("线宽:"))
+        self.spinbox_width = QSpinBox()
+        self.spinbox_width.setRange(1, 100)
+        self.spinbox_width.valueChanged.connect(self.canvas.set_pen_width)
+        self.edit_attr_toolbar.addWidget(self.spinbox_width)
+        
+        # --- 🔴 新增：添加算法选择的下拉菜单 ---
+        self.edit_attr_toolbar.addSeparator()
+        self.edit_attr_toolbar.addWidget(QLabel("直线算法:"))
+        self.algo_combo = QComboBox()
+        self.algo_combo.addItems(["Bresenham", "DDA", "PyQt原生"])
+        self.algo_combo.currentTextChanged.connect(self.canvas.set_raster_algorithm)
+        self.edit_attr_toolbar.addWidget(self.algo_combo)
+        
+        # --- 5. 向【对齐工具栏】添加动作 ---
+        action_align_left = create_action_with_icon("align_left.svg", "左对齐", self)
+        action_align_left.triggered.connect(lambda: self.canvas.align_selected_shapes('left'))
+        self.align_toolbar.addAction(action_align_left)
+        
+        action_align_center_h = create_action_with_icon("align_center_h.svg", "水平居中", self)
+        action_align_center_h.triggered.connect(lambda: self.canvas.align_selected_shapes('center_h'))
+        self.align_toolbar.addAction(action_align_center_h)
+        
+        action_align_right = create_action_with_icon("align_right.svg", "右对齐", self)
+        action_align_right.triggered.connect(lambda: self.canvas.align_selected_shapes('right'))
+        self.align_toolbar.addAction(action_align_right)
+        
+        self.align_toolbar.addSeparator()
+        
+        action_align_top = create_action_with_icon("align_top.svg", "顶对齐", self)
+        action_align_top.triggered.connect(lambda: self.canvas.align_selected_shapes('top'))
+        self.align_toolbar.addAction(action_align_top)
+        
+        action_align_center_v = create_action_with_icon("align_center_v.svg", "垂直居中", self)
+        action_align_center_v.triggered.connect(lambda: self.canvas.align_selected_shapes('center_v'))
+        self.align_toolbar.addAction(action_align_center_v)
+        
+        action_align_bottom = create_action_with_icon("align_bottom.svg", "底对齐", self)
+        action_align_bottom.triggered.connect(lambda: self.canvas.align_selected_shapes('bottom'))
+        self.align_toolbar.addAction(action_align_bottom)
+        
+        self.align_actions = self.align_toolbar.actions()
+        
+        # --- 6. 向【文本格式工具栏】添加动作 ---
+        self.action_bold = create_action_with_icon("bold.svg", "粗体", self)
+        self.action_bold.setCheckable(True)
+        self.action_bold.triggered.connect(self.handle_text_bold_toggle)
+        self.text_format_toolbar.addAction(self.action_bold)
+        
+        self.action_italic = create_action_with_icon("italic.svg", "斜体", self)
+        self.action_italic.setCheckable(True)
+        self.action_italic.triggered.connect(self.handle_text_italic_toggle)
+        self.text_format_toolbar.addAction(self.action_italic)
+        
+        self.text_format_toolbar.addSeparator()
+        
+        self.action_align_left_text = create_action_with_icon("align_left.svg", "文本左对齐", self)
+        self.action_align_left_text.triggered.connect(lambda: self.handle_text_alignment(Qt.AlignmentFlag.AlignLeft))
+        self.text_format_toolbar.addAction(self.action_align_left_text)
+        
+        self.action_align_center_text = create_action_with_icon("align_center_h.svg", "文本居中对齐", self)
+        self.action_align_center_text.triggered.connect(lambda: self.handle_text_alignment(Qt.AlignmentFlag.AlignHCenter))
+        self.text_format_toolbar.addAction(self.action_align_center_text)
+        
+        self.action_align_right_text = create_action_with_icon("align_right.svg", "文本右对齐", self)
+        self.action_align_right_text.triggered.connect(lambda: self.handle_text_alignment(Qt.AlignmentFlag.AlignRight))
+        self.text_format_toolbar.addAction(self.action_align_right_text)
+    
     def _connect_signals(self):
         for action in self.align_actions:
             action.setEnabled(False)

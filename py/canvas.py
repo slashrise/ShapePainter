@@ -55,11 +55,16 @@ class CanvasWidget(QWidget):
             "pen": PenTool(self), "freehand": FreehandTool(self), "eraser": EraserTool(self), "paint_bucket": PaintBucketTool(self),
         }
         self.current_tool_obj = self.tools["select"]
+        self.current_raster_algorithm = "PyQt原生"
 
     @property
     def is_dirty(self):
         """动态判断画布是否“脏”（有未保存的更改）"""
         return len(self.undo_stack) != self._saved_stack_len
+    
+    def set_raster_algorithm(self, algo_name: str):
+        self.current_raster_algorithm = algo_name
+        self.update()
 
     def execute_command(self, command):
         command.redo()
@@ -335,12 +340,19 @@ class CanvasWidget(QWidget):
 
     def paintEvent(self, event):
         painter = QPainter(self)
+        # --- 🔴 关键：确保 painter.canvas 属性被设置 ---
+        painter.canvas = self 
         painter.fillRect(self.rect(), self.background_color)
         if self.grid_enabled:
             self.draw_grid(painter)
         self.draw_guides(painter)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
         CanvasRenderer.paint(painter, self)
+
+    # --- 🔴 回退：恢复 _draw_arrow 辅助方法 ---
+    def _draw_arrow(self, painter, p1, p2, color, width):
+        """一个简单的代理方法，用于从 tools.py 中调用渲染器"""
+        CanvasRenderer.draw_arrow(painter, p1, p2, color, width)
 
     def draw_grid(self, painter):
         pen = QPen(QColor(220, 220, 220), 1, Qt.PenStyle.DotLine)
@@ -605,9 +617,6 @@ class CanvasWidget(QWidget):
                     return shape, layer
         return None, None
 
-    def _draw_arrow(self, painter, p1, p2, color, width):
-        CanvasRenderer.draw_arrow(painter, p1, p2, color, width)
-
     def copy_selected(self):
         if self.selected_shapes:
             self.clipboard = [shape.clone() for shape in self.selected_shapes]
@@ -744,3 +753,11 @@ class CanvasWidget(QWidget):
             
             # 现在创建命令，redo()会将其设置为最终值
             self.execute_command(ChangePropertiesCommand([layer], {'opacity': final_opacity}))
+    def set_raster_algorithm(self, algo_name: str):
+        """
+        由主窗口的UI下拉菜单调用，用于更新当前选择的光栅化算法。
+        """
+        self.current_raster_algorithm = algo_name
+        # 关键：在更新算法后，立即请求重绘整个画布，
+        # 这样所有图形都会用新的算法重新绘制。
+        self.update()
