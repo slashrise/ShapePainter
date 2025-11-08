@@ -147,6 +147,14 @@ class MainWindow(QMainWindow):
         self.snap_to_grid_action.toggled.connect(self.canvas.toggle_snapping)
         view_menu.addAction(self.snap_to_grid_action)
 
+        view_menu.addSeparator() # 添加一个分隔线
+
+        self.ssaa_action = QAction("启用抗锯齿 (SSAA)", self)
+        self.ssaa_action.setCheckable(True)
+        self.ssaa_action.setChecked(True) # 默认开启
+        self.ssaa_action.toggled.connect(self.canvas.toggle_ssaa)
+        view_menu.addAction(self.ssaa_action)
+
         action_export_png = QAction("导出为PNG...", self)
         action_export_png.triggered.connect(self.canvas.export_as_png)
         export_menu.addAction(action_export_png)
@@ -158,6 +166,8 @@ class MainWindow(QMainWindow):
         action_show_manual = QAction("查看用户手册...", self)
         action_show_manual.triggered.connect(self.show_user_manual)
         help_menu.addAction(action_show_manual)
+
+        
 
     def _create_toolbars(self):
         self.setDockOptions(QMainWindow.DockOption.AnimatedDocks | QMainWindow.DockOption.AllowNestedDocks)

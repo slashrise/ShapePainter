@@ -8,6 +8,8 @@ from commands import (AddShapeCommand, RemoveShapesCommand, MoveShapesCommand,
                       ScaleCommand, ChangePropertiesCommand, RotateCommand, FlipCommand, ModifyNodeCommand,
                       CompositeCommand, ModifyPathCommand)
 from renderer import CanvasRenderer
+import raster_algorithms
+
 
 class Tool:
     def __init__(self, canvas): self.canvas = canvas
@@ -84,6 +86,7 @@ class SelectTool(Tool):
             self.old_paths_snapshot = [ [s.clone() for s in sp] for sp in shape.sub_paths ]
             shape.sub_paths[sp_idx].append(PathSegment(snapped_pos, node_type=PathSegment.CORNER))
             self.new_node_start_pos = snapped_pos
+            if shape.layer: shape.layer.is_dirty = True
             self.canvas.update()
             return
 
@@ -97,7 +100,7 @@ class SelectTool(Tool):
 
         handle_type = self._get_handle_type_at(event.pos())
         if handle_type and self.canvas.selected_shapes:
-            if any(not self.canvas._get_layer_for_shape(s).is_locked for s in self.canvas.selected_shapes):
+            if any(s.layer and not s.layer.is_locked for s in self.canvas.selected_shapes):
                 if handle_type == "rotate":
                     self._handle_rotate_start(event)
                 else:
@@ -120,6 +123,7 @@ class SelectTool(Tool):
                 if sub_path:
                     last_seg = sub_path[-1]
                     last_seg.to_smooth(handle=snapped_pos)
+            if shape.layer: shape.layer.is_dirty = True
             self.canvas.update()
             return
 
@@ -205,21 +209,46 @@ class SelectTool(Tool):
         snapped_current_pos = self.canvas.snap_point(event.pos())
         if not self.action_start_position: return
         delta = snapped_current_pos - self.action_start_position
+        
+        affected_layers = set()
+        
         for i, original_shape in enumerate(self.original_shapes_for_action):
-            self.canvas.selected_shapes[i].__dict__ = original_shape.clone().__dict__
-            self.canvas.selected_shapes[i].move(delta.x(), delta.y())
-        self.canvas.update()
+            current_shape = self.canvas.selected_shapes[i]
+            
+            # 🔴 核心修复：在覆盖前，保存好 layer 引用
+            original_layer_ref = current_shape.layer
+            
+            # 执行覆盖和移动
+            current_shape.__dict__ = original_shape.clone().__dict__
+            current_shape.move(delta.x(), delta.y())
+            
+            # 🔴 核心修复：恢复 layer 引用
+            current_shape.layer = original_layer_ref
+            
+            if current_shape.layer:
+                affected_layers.add(current_shape.layer)
 
+        for layer in affected_layers:
+            layer.is_dirty = True
+        self.canvas.update()
     def _handle_drag_finish(self, event):
         if not self.action_start_position: return
         snapped_current_pos = self.canvas.snap_point(event.pos())
         total_delta = snapped_current_pos - self.action_start_position
-        for i, original_shape in enumerate(self.original_shapes_for_action):
-            self.canvas.selected_shapes[i].__dict__ = original_shape.__dict__
+        
+        # 🔴 核心修复：删除下面这几行多余且有害的状态重置代码
+        # for i, original_shape in enumerate(self.original_shapes_for_action):
+        #     self.canvas.selected_shapes[i].__dict__ = original_shape.__dict__
+
         if total_delta.manhattanLength() > 2:
+            # 🔴 重要：我们需要在创建命令前，先把预览时的位移“撤销”掉
+            for shape in self.canvas.selected_shapes:
+                shape.move(-total_delta.x(), -total_delta.y())
+            
             command = MoveShapesCommand(self.canvas.selected_shapes, total_delta.x(), total_delta.y())
             self.canvas.execute_command(command)
         else:
+            # 如果只是点击，没有拖动，确保画布刷新
             self.canvas.update()
 
     def _handle_multiselect_finish(self):
@@ -236,9 +265,7 @@ class SelectTool(Tool):
         self.canvas.update()
 
     def _handle_scale_start(self, event, corner_name):
-        self.dragging = False
-        self.scaling = True
-        self.scale_corner = corner_name
+        self.dragging = False; self.scaling = True; self.scale_corner = corner_name
         self.action_start_position = event.pos()
         self.original_shapes_for_action = [s.clone() for s in self.canvas.selected_shapes]
         total_bbox = self.canvas._get_selection_bbox()
@@ -257,9 +284,25 @@ class SelectTool(Tool):
         dist_end_len = math.sqrt(dist_end_vec.x() ** 2 + dist_end_vec.y() ** 2)
         if dist_start_len == 0: return
         factor = dist_end_len / dist_start_len
+        
+        affected_layers = set()
+        
         for i, original_shape in enumerate(self.original_shapes_for_action):
-            self.canvas.selected_shapes[i].__dict__ = original_shape.clone().__dict__
-            self.canvas.selected_shapes[i].scale(factor, self.scale_center)
+            current_shape = self.canvas.selected_shapes[i]
+
+            # 🔴 核心修复：保存和恢复 layer 引用
+            original_layer_ref = current_shape.layer
+            
+            current_shape.__dict__ = original_shape.clone().__dict__
+            current_shape.scale(factor, self.scale_center)
+            
+            current_shape.layer = original_layer_ref
+            
+            if current_shape.layer:
+                affected_layers.add(current_shape.layer)
+
+        for layer in affected_layers:
+            layer.is_dirty = True
         self.canvas.update()
 
     def _handle_scale_finish(self, event):
@@ -270,15 +313,21 @@ class SelectTool(Tool):
         dist_start_len = math.sqrt(dist_start_vec.x() ** 2 + dist_start_vec.y() ** 2)
         dist_end_len = math.sqrt(dist_end_vec.x() ** 2 + dist_end_vec.y() ** 2)
         final_factor = dist_end_len / dist_start_len if dist_start_len != 0 else 1.0
-        for i, original_shape in enumerate(self.original_shapes_for_action):
-            self.canvas.selected_shapes[i].__dict__ = original_shape.__dict__
+
+        # 🔴 核心修复：删除多余的状态重置
+        # for i, original_shape in enumerate(self.original_shapes_for_action):
+        #     self.canvas.selected_shapes[i].__dict__ = original_shape.__dict__
+
         if abs(final_factor - 1.0) > 0.001:
+            # 🔴 重要：撤销预览时的缩放
+            for shape in self.canvas.selected_shapes:
+                shape.scale(1.0 / final_factor, self.scale_center)
+
             command = ScaleCommand(self.canvas.selected_shapes, final_factor, self.scale_center)
             self.canvas.execute_command(command)
 
     def _handle_rotate_start(self, event):
-        self.rotating = True
-        self.action_start_position = event.pos()
+        self.rotating = True; self.action_start_position = event.pos()
         self.original_shapes_for_action = [s.clone() for s in self.canvas.selected_shapes]
         self.scale_center = self.canvas._get_selection_bbox().center()
 
@@ -290,12 +339,28 @@ class SelectTool(Tool):
         current_angle = math.atan2(current_vec.y(), current_vec.x())
         angle_delta_rad = current_angle - start_angle
         angle_delta_deg = math.degrees(angle_delta_rad)
+
+        affected_layers = set()
+
         for i, original_shape in enumerate(self.original_shapes_for_action):
-            self.canvas.selected_shapes[i].__dict__ = original_shape.clone().__dict__
+            current_shape = self.canvas.selected_shapes[i]
+
+            # 🔴 核心修复：保存和恢复 layer 引用
+            original_layer_ref = current_shape.layer
+
+            current_shape.__dict__ = original_shape.clone().__dict__
             final_angle_delta = angle_delta_deg
-            if self.canvas.selected_shapes[i].scale_x * self.canvas.selected_shapes[i].scale_y < 0:
+            if current_shape.scale_x * current_shape.scale_y < 0:
                 final_angle_delta = -angle_delta_deg
-            self.canvas.selected_shapes[i].rotate(rotation_delta=final_angle_delta)
+            current_shape.rotate(rotation_delta=final_angle_delta)
+            
+            current_shape.layer = original_layer_ref
+
+            if current_shape.layer:
+                affected_layers.add(current_shape.layer)
+
+        for layer in affected_layers:
+            layer.is_dirty = True
         self.canvas.update()
 
     def _handle_rotate_finish(self, event):
@@ -306,14 +371,22 @@ class SelectTool(Tool):
         current_angle = math.atan2(current_vec.y(), current_vec.x())
         angle_delta_rad = current_angle - start_angle
         final_angle_delta_deg = math.degrees(angle_delta_rad)
-        for i, original_shape in enumerate(self.original_shapes_for_action):
-            self.canvas.selected_shapes[i].__dict__ = original_shape.__dict__
+
+        # 🔴 核心修复：删除多余的状态重置
+        # for i, original_shape in enumerate(self.original_shapes_for_action):
+        #     self.canvas.selected_shapes[i].__dict__ = original_shape.__dict__
+
         if self.original_shapes_for_action:
             original_shape = self.original_shapes_for_action[0]
             final_angle_delta = final_angle_delta_deg
             if original_shape.scale_x * original_shape.scale_y < 0:
                 final_angle_delta = -final_angle_delta_deg
+            
             if abs(final_angle_delta_deg) > 0.1:
+                # 🔴 重要：撤销预览时的旋转
+                for shape in self.canvas.selected_shapes:
+                    shape.rotate(-final_angle_delta)
+
                 command = RotateCommand(self.canvas.selected_shapes, rotation_delta=final_angle_delta)
                 self.canvas.execute_command(command)
 
@@ -847,13 +920,31 @@ class PointTool(Tool):
             command = AddShapeCommand(current_layer, new_shape); self.canvas.execute_command(command)
 
 class LineTool(BaseDrawingTool):
-    def create_shape(self): return Line(self.start_point, self.end_point, self.canvas.current_pen_color, self.canvas.current_width)
+    def create_shape(self):
+        # 在创建图形时，检查Shift键的状态
+        modifiers = QApplication.keyboardModifiers()
+        if modifiers == Qt.KeyboardModifier.ShiftModifier:
+            return Arrow(self.start_point, self.end_point, self.canvas.current_pen_color, self.canvas.current_width)
+        else:
+            return Line(self.start_point, self.end_point, self.canvas.current_pen_color, self.canvas.current_width)
+
     def draw_preview(self, painter):
-        self.canvas._draw_arrow(painter, self.start_point, self.end_point, self.canvas.current_pen_color, self.canvas.current_width)
+        # 在预览时，也检查Shift键的状态来决定画什么预览
+        modifiers = QApplication.keyboardModifiers()
+        if modifiers == Qt.KeyboardModifier.ShiftModifier:
+            # 如果是Shift，调用renderer的arrow方法画箭头预览
+            CanvasRenderer.draw_arrow(painter, self.start_point, self.end_point, self.canvas.current_pen_color, self.canvas.current_width)
+        else:
+            # 否则，直接用painter画一条普通的虚线作为预览
+            painter.drawLine(self.start_point, self.end_point)
 
 class ArrowTool(BaseDrawingTool):
-    def create_shape(self): return Arrow(self.start_point, self.end_point, self.canvas.current_pen_color, self.canvas.current_width)
-    def draw_preview(self, painter): CanvasRenderer.draw_arrow(painter, self.start_point, self.end_point, self.canvas.current_pen_color, self.canvas.current_width)
+    def create_shape(self):
+        return Arrow(self.start_point, self.end_point, self.canvas.current_pen_color, self.canvas.current_width)
+    
+    def draw_preview(self, painter):
+        # 箭头工具的预览总是箭头
+        CanvasRenderer.draw_arrow(painter, self.start_point, self.end_point, self.canvas.current_pen_color, self.canvas.current_width)
 class RectangleTool(BaseDrawingTool):
     def create_shape(self): rect = QRect(self.start_point, self.end_point).normalized(); return Rectangle(rect.topLeft(), rect.bottomRight(), self.canvas.current_pen_color, self.canvas.current_width, self.canvas.current_fill_color, self.canvas.current_fill_style)
     def draw_preview(self, painter): painter.drawRect(QRect(self.start_point, self.end_point).normalized())
