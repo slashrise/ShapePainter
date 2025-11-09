@@ -1,4 +1,42 @@
 import math
+# 🔴 确保导入 QPoint 和 QPointF
+from PyQt6.QtCore import QPoint, QPointF
+
+# 🟢 START: 新增贝塞尔曲线辅助函数
+def lerp(p1, p2, t):
+    """对两个QPointF进行线性插值"""
+    return p1 * (1.0 - t) + p2 * (t)
+
+def distance_point_to_line(p, v, w):
+    """计算点p到线段vw的垂直距离的平方"""
+    l2 = (v - w).x() * (v - w).x() + (v - w).y() * (v - w).y()
+    if l2 == 0.0:
+        return (p - v).x() * (p - v).x() + (p - v).y() * (p - v).y()
+    t = max(0, min(1, ((p - v).x() * (w - v).x() + (p - v).y() * (w - v).y()) / l2))
+    projection = v + t * (w - v)
+    return (p - projection).x() * (p - projection).x() + (p - projection).y() * (p - projection).y()
+
+def subdivide_bezier(p0, p1, p2, p3):
+    """使用De Casteljau算法将一条三次贝塞尔曲线在 t=0.5 处分割成两条。"""
+    p0, p1, p2, p3 = QPointF(p0), QPointF(p1), QPointF(p2), QPointF(p3)
+    p01 = lerp(p0, p1, 0.5); p12 = lerp(p1, p2, 0.5); p23 = lerp(p2, p3, 0.5)
+    p012 = lerp(p01, p12, 0.5); p123 = lerp(p12, p23, 0.5)
+    p0123 = lerp(p012, p123, 0.5)
+    left_curve = (p0, p01, p012, p0123); right_curve = (p0123, p123, p23, p3)
+    return left_curve, right_curve
+
+def flatten_bezier(p0, p1, p2, p3, tolerance=0.5):
+    """递归地将贝塞尔曲线扁平化为一系列点。"""
+    points = []; p0, p1, p2, p3 = QPointF(p0), QPointF(p1), QPointF(p2), QPointF(p3)
+    dist_sq1 = distance_point_to_line(p1, p0, p3); dist_sq2 = distance_point_to_line(p2, p0, p3)
+    if dist_sq1 < tolerance * tolerance and dist_sq2 < tolerance * tolerance:
+        points.append(p0.toPoint()); points.append(p3.toPoint()); return points
+    left, right = subdivide_bezier(p0, p1, p2, p3)
+    left_points = flatten_bezier(left[0], left[1], left[2], left[3], tolerance)
+    right_points = flatten_bezier(right[0], right[1], right[2], right[3], tolerance)
+    points.extend(left_points[:-1]); points.extend(right_points)
+    return points
+# 🟢 END: 新增贝塞尔曲线辅助函数
 
 def bresenham_line(x1, y1, x2, y2):
     """Bresenham 直线光栅化算法"""
@@ -69,35 +107,58 @@ def midpoint_ellipse(xc, yc, rx, ry):
 def _plot_ellipse_points(xc, yc, x, y, pixels):
     pixels.extend([(xc + x, yc + y), (xc - x, yc + y), (xc + x, yc - y), (xc - x, yc - y)])
 
+# 🟢 START: 新增圆角矩形和椭圆填充/轮廓算法
+def scanline_fill_ellipse(xc, yc, rx, ry):
+    """使用扫描线算法填充椭圆。"""
+    if rx <= 0 or ry <= 0: return []
+    pixels = []; rx2 = rx * rx; ry2 = ry * ry
+    for y_offset in range(-ry, ry + 1):
+        x_half_width = round(rx * math.sqrt(max(0, 1 - (y_offset * y_offset) / ry2)))
+        x_start, x_end = xc - x_half_width, xc + x_half_width
+        y = yc + y_offset
+        for x in range(x_start, x_end + 1): pixels.append((x, y))
+    return pixels
+
 def rasterize_quarter_circle(xc, yc, r, quadrant):
     """光栅化四分之一圆弧"""
     pixels = []; x, y, d = 0, r, 1 - r
     while x <= y:
-        _plot_arc_points(xc, yc, x, y, quadrant, pixels); x += 1
+        if quadrant == 1: pixels.extend([(xc + x, yc - y), (xc + y, yc - x)])
+        elif quadrant == 2: pixels.extend([(xc - y, yc - x), (xc - x, yc - y)])
+        elif quadrant == 3: pixels.extend([(xc - x, yc + y), (xc - y, yc + x)])
+        elif quadrant == 4: pixels.extend([(xc + y, yc + x), (xc + x, yc + y)])
+        x += 1
         if d < 0: d += 2 * x + 3
         else: y -= 1; d += 2 * (x - y) + 5
     return pixels
 
-def _plot_arc_points(xc, yc, x, y, quadrant, pixels):
-    if quadrant == 1: pixels.extend([(xc + x, yc - y), (xc + y, yc - x)])
-    elif quadrant == 2: pixels.extend([(xc - y, yc - x), (xc - x, yc - y)])
-    elif quadrant == 3: pixels.extend([(xc - x, yc + y), (xc - y, yc + x)])
-    elif quadrant == 4: pixels.extend([(xc + y, yc + x), (xc + x, yc + y)])
+def scanline_fill_rounded_rect(x, y, w, h, r):
+    """使用扫描线算法填充圆角矩形。"""
+    if w <= 0 or h <= 0: return []
+    r = min(r, w // 2, h // 2)
+    pixels = []
+    for current_y in range(y, y + h):
+        x_start, x_end = 0, 0
+        if current_y < y + r:
+            y_offset = (y + r) - current_y
+            x_offset = round(math.sqrt(max(0, r * r - y_offset * y_offset)))
+            x_start, x_end = x + r - x_offset, x + w - r + x_offset
+        elif current_y >= y + r and current_y <= y + h - r:
+            x_start, x_end = x, x + w
+        else:
+            y_offset = current_y - (y + h - r)
+            x_offset = round(math.sqrt(max(0, r * r - y_offset * y_offset)))
+            x_start, x_end = x + r - x_offset, x + w - r + x_offset
+        for current_x in range(x_start, x_end): pixels.append((current_x, current_y))
+    return pixels
+# 🟢 END: 新增算法
 
 def scanline_fill_polygon(points):
     """健壮的通用扫描线多边形填充算法"""
     if not points or len(points) < 3: return []
     point_tuples = [(p.x(), p.y()) if not isinstance(p, tuple) else p for p in points]
-    pixels = []
-    
-    y_min_float = min(p[1] for p in point_tuples)
-    y_max_float = max(p[1] for p in point_tuples)
-    
-    # 🔴 核心修复：在使用前，将浮点数坐标强制转换为整数
-    y_min = int(y_min_float)
-    y_max = int(y_max_float)
-
-    edge_table = {y: [] for y in range(y_min, y_max + 1)}
+    pixels = []; y_min_float = min(p[1] for p in point_tuples); y_max_float = max(p[1] for p in point_tuples)
+    y_min, y_max = int(y_min_float), int(y_max_float)
     edge_table = {y: [] for y in range(y_min, y_max + 1)}
     for i in range(len(point_tuples)):
         p1, p2 = point_tuples[i], point_tuples[(i + 1) % len(point_tuples)]
@@ -105,8 +166,8 @@ def scanline_fill_polygon(points):
         y_start, y_end = min(p1[1], p2[1]), max(p1[1], p2[1])
         x_start = p1[0] if p1[1] < p2[1] else p2[0]
         dx, dy = float(p1[0] - p2[0]), float(p1[1] - p2[1])
-        inverse_slope = dx / dy
-        edge_table[y_start].append([y_end, x_start, inverse_slope])
+        inverse_slope = dx / dy if dy != 0 else 0
+        edge_table[int(y_start)].append([int(y_end), x_start, inverse_slope])
     active_edge_table = []
     for y in range(y_min, y_max + 1):
         active_edge_table.extend(edge_table[y])
@@ -119,52 +180,19 @@ def scanline_fill_polygon(points):
         for edge in active_edge_table:
             edge[1] += edge[2]
     return pixels
+
 def calculate_arrow_head_points(x1, y1, x2, y2, width):
-    """
-    计算箭头三角形头部的三个整数顶点坐标。
-    返回一个包含三个 (x, y) 元组的列表。
-    """
-    # 这是从终点p2指向起点p1的向量的角度
-    angle = math.atan2(y1 - y2, x1 - x2)
-    
-    # 定义箭头头部的大小和张开角度，并随线宽缩放
-    arrow_size = 10 + width * 2
-    arrow_spread_angle = math.pi / 6  # 30度的张开角度
-
-    # 计算三角形的另外两个侧边顶点
-    p_left_x = x2 + arrow_size * math.cos(angle - arrow_spread_angle)
-    p_left_y = y2 + arrow_size * math.sin(angle - arrow_spread_angle)
-    
-    p_right_x = x2 + arrow_size * math.cos(angle + arrow_spread_angle)
-    p_right_y = y2 + arrow_size * math.sin(angle + arrow_spread_angle)
-
-    # 三个顶点分别是：原始终点，以及两个新的侧边点
-    # 我们将坐标转换为整数以用于我们的光栅化器
-    return [
-        (int(x2), int(y2)),
-        (int(p_left_x), int(p_left_y)),
-        (int(p_right_x), int(p_right_y))
-    ]
+    """计算箭头三角形头部的三个整数顶点坐标。"""
+    angle = math.atan2(y1 - y2, x1 - x2); arrow_size = 10 + width * 2; arrow_spread_angle = math.pi / 6
+    p_left_x = x2 + arrow_size * math.cos(angle - arrow_spread_angle); p_left_y = y2 + arrow_size * math.sin(angle - arrow_spread_angle)
+    p_right_x = x2 + arrow_size * math.cos(angle + arrow_spread_angle); p_right_y = y2 + arrow_size * math.sin(angle + arrow_spread_angle)
+    return [(int(x2), int(y2)), (int(p_left_x), int(p_left_y)), (int(p_right_x), int(p_right_y))]
 
 def calculate_wide_line_polygon(x1, y1, x2, y2, width):
     """计算代表一条粗线的四边形的四个顶点。"""
-    offset = width / 2.0
-    dx = x2 - x1
-    dy = y2 - y1
-    length = math.sqrt(dx*dx + dy*dy)
-    if length == 0:
-        # 处理零长度线段的情况
-        return [(x1-offset, y1-offset), (x1+offset, y1-offset), 
-                (x1+offset, y1+offset), (x1-offset, y1+offset)]
-
-    # 计算线段的法线向量 (单位向量)
-    nx = -dy / length
-    ny = dx / length
-    
-    # 计算四个顶点
-    p1 = (int(x1 + nx * offset), int(y1 + ny * offset))
-    p2 = (int(x2 + nx * offset), int(y2 + ny * offset))
-    p3 = (int(x2 - nx * offset), int(y2 - ny * offset))
-    p4 = (int(x1 - nx * offset), int(y1 - ny * offset))
-    
+    offset = width / 2.0; dx = x2 - x1; dy = y2 - y1; length = math.sqrt(dx*dx + dy*dy)
+    if length == 0: return [(x1-offset, y1-offset), (x1+offset, y1-offset), (x1+offset, y1+offset), (x1-offset, y1+offset)]
+    nx = -dy / length; ny = dx / length
+    p1 = (int(x1 + nx * offset), int(y1 + ny * offset)); p2 = (int(x2 + nx * offset), int(y2 + ny * offset))
+    p3 = (int(x2 - nx * offset), int(y2 - ny * offset)); p4 = (int(x1 - nx * offset), int(y1 - ny * offset))
     return [p1, p2, p3, p4]

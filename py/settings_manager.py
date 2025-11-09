@@ -11,7 +11,8 @@ class SettingsManager:
             "default_pen_width": 2,
             "default_font": QFont("Arial", 24),
             "canvas_background_color": QColor(255, 255, 255),
-            "show_manual_on_startup": True  # 🔴 新增默认设置
+            # 新增的、更通用的设置项
+            "show_welcome_on_startup": True
         }
 
     def load_settings(self):
@@ -30,9 +31,9 @@ class SettingsManager:
         bg_color_str = self.settings.value("canvas/background_color", defaults["canvas_background_color"].name())
         settings["canvas_background_color"] = QColor(bg_color_str)
         
-        # 🔴 新增加载逻辑
-        settings["show_manual_on_startup"] = self.settings.value("general/show_manual_on_startup", 
-                                                                  defaults["show_manual_on_startup"], 
+        # 新增加载逻辑
+        settings["show_welcome_on_startup"] = self.settings.value("general/show_welcome_on_startup", 
+                                                                  defaults["show_welcome_on_startup"], 
                                                                   type=bool)
         return settings
 
@@ -42,8 +43,8 @@ class SettingsManager:
         self.settings.setValue("defaults/font", settings["default_font"].toString())
         self.settings.setValue("canvas/background_color", settings["canvas_background_color"].name())
         
-        # 🔴 新增保存逻辑
-        if "show_manual_on_startup" in settings:
-            self.settings.setValue("general/show_manual_on_startup", settings["show_manual_on_startup"])
+        # 新增保存逻辑
+        if "show_welcome_on_startup" in settings:
+            self.settings.setValue("general/show_welcome_on_startup", settings["show_welcome_on_startup"])
         
         self.settings.sync()
