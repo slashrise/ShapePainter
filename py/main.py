@@ -12,7 +12,7 @@ from layer_panel import LayerPanel
 from rulers import CanvasView
 from settings_manager import SettingsManager
 from preferences_dialog import PreferencesDialog
-from shapes import Text, Path
+from shapes import Text, Path, BezierSurface
 from tools import PenTool
 # 🟢 导入我们新创建的对话框
 from welcome_dialog import WelcomeDialog
@@ -98,7 +98,28 @@ class MainWindow(QMainWindow):
         
         view_menu.addSeparator()
         self.ssaa_action = QAction("启用抗锯齿 (SSAA)", self); self.ssaa_action.setCheckable(True); self.ssaa_action.setChecked(True); self.ssaa_action.toggled.connect(self.canvas.toggle_ssaa); view_menu.addAction(self.ssaa_action)
+        # 🟢 [新增] 曲面显示设置子菜单
+        view_menu.addSeparator()
+        surface_view_menu = view_menu.addMenu("曲面显示模式")
         
+        # 1. 显示填充 Action
+        self.action_view_surf_fill = QAction("显示曲面填充", self)
+        self.action_view_surf_fill.setCheckable(True)
+        self.action_view_surf_fill.setEnabled(False) # 默认禁用，只有选中曲面时才启用
+        # 连接信号：触发时调用 canvas 的方法
+        self.action_view_surf_fill.triggered.connect(
+            lambda checked: self.canvas.toggle_surface_property('show_fill', checked)
+        )
+        surface_view_menu.addAction(self.action_view_surf_fill)
+
+        # 2. 显示网格线 Action
+        self.action_view_surf_wire = QAction("显示网格线", self)
+        self.action_view_surf_wire.setCheckable(True)
+        self.action_view_surf_wire.setEnabled(False) # 默认禁用
+        self.action_view_surf_wire.triggered.connect(
+            lambda checked: self.canvas.toggle_surface_property('show_wireframe', checked)
+        )
+        surface_view_menu.addAction(self.action_view_surf_wire)
         action_export_png = QAction("导出为PNG...", self); action_export_png.triggered.connect(self.canvas.export_as_png); export_menu.addAction(action_export_png)
         action_export_svg = QAction("导出为SVG...", self); action_export_svg.triggered.connect(self.canvas.export_as_svg); export_menu.addAction(action_export_svg)
         
@@ -122,7 +143,7 @@ class MainWindow(QMainWindow):
             else: print(f"Warning: Icon not found at '{path}'")
             action.setToolTip(tooltip or text); return action
 
-        tools_to_add = [("mouse pointer.svg", "选择", "select"), ("separator",), ("line_curve.svg", "贝塞尔曲线", "pen"), ("draw.svg", "手绘", "freehand"), ("separator",), ("point.svg", "画点", "point"), ("remove.svg", "画直线", "line"), ("arrow.svg", "箭头", "arrow"), ("rectangle.svg", "画矩形", "rect"), ("square.svg", "画正方形", "square"), ("circle.svg", "画圆形", "circle"), ("ellipse.svg", "画椭圆", "ellipse"), ("rounded rectangle.svg", "画圆角矩形", "rounded_rect"), ("pentagon.svg", "画多边形", "polygon"), ("polyline.svg", "画折线", "polyline")]
+        tools_to_add = [("mouse pointer.svg", "选择", "select"), ("separator",), ("line_curve.svg", "贝塞尔曲线", "pen"),("curve_bspline.svg", "B样条曲线", "bspline"), ("draw.svg", "手绘", "freehand"), ("separator",), ("point.svg", "画点", "point"), ("remove.svg", "画直线", "line"), ("arrow.svg", "箭头", "arrow"), ("rectangle.svg", "画矩形", "rect"), ("square.svg", "画正方形", "square"), ("circle.svg", "画圆形", "circle"), ("ellipse.svg", "画椭圆", "ellipse"), ("rounded rectangle.svg", "画圆角矩形", "rounded_rect"), ("pentagon.svg", "画多边形", "polygon"), ("polyline.svg", "画折线", "polyline"),("grid.svg", "贝塞尔曲面", "surface"),]
         for item in tools_to_add:
             if item[0] == "separator": self.draw_toolbar.addSeparator(); continue
             icon, text, tool_name = item; action = create_action_with_icon(icon, text, self); action.triggered.connect(lambda checked=False, t=tool_name: self.canvas.set_tool(t)); self.draw_toolbar.addAction(action)
@@ -302,6 +323,28 @@ class MainWindow(QMainWindow):
             font = first_text.font if first_text else self.canvas.current_font
             self.action_bold.setChecked(font.bold())
             self.action_italic.setChecked(font.italic())
+        # 🟢 [新增] 检查曲面选择状态，更新菜单项
+        # 1. 找出选中的所有曲面
+        surfaces = [s for s in self.canvas.selected_shapes if isinstance(s, BezierSurface)]
+        has_surface = bool(surfaces)
+
+        # 2. 启用/禁用菜单项
+        if hasattr(self, 'action_view_surf_fill'): #以此防卫性编程，防止初始化时报错
+            self.action_view_surf_fill.setEnabled(has_surface)
+            self.action_view_surf_wire.setEnabled(has_surface)
+
+            # 3. 同步勾选状态 (以第一个选中的曲面为准)
+            if has_surface:
+                first_surf = surfaces[0]
+                # 这里的 blockSignals 是为了防止设置 Checked 时误触发 triggered 信号导致死循环
+                self.action_view_surf_fill.blockSignals(True)
+                self.action_view_surf_wire.blockSignals(True)
+                
+                self.action_view_surf_fill.setChecked(first_surf.show_fill)
+                self.action_view_surf_wire.setChecked(first_surf.show_wireframe)
+                
+                self.action_view_surf_fill.blockSignals(False)
+                self.action_view_surf_wire.blockSignals(False)
 
     def update_align_actions(self):
         enable = len(self.canvas.selected_shapes) >= 2

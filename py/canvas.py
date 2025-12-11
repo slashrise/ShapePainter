@@ -3,7 +3,7 @@
 from PyQt6.QtWidgets import (QWidget, QFileDialog, QMenu, QColorDialog, QTextEdit, 
                              QFontDialog, QApplication, QMessageBox)
 from PyQt6.QtGui import QPainter, QColor, QPixmap, QAction, QFont, QBrush, QKeySequence, QPalette
-from PyQt6.QtCore import Qt, QPoint, QRect, pyqtSignal
+from PyQt6.QtCore import Qt, QPoint, QRect, pyqtSignal, QPointF
 from PyQt6.QtSvg import QSvgGenerator
 
 from shapes import *
@@ -46,7 +46,7 @@ class CanvasWidget(QWidget):
         self.current_fill_color = None; self.current_fill_style = Qt.BrushStyle.NoBrush
         self.editing_shape = None; self.text_editor = None
         self.grid_enabled = False; self.snap_enabled = False
-        self.grid_size = 20; self.snap_threshold = 8
+        self.grid_size = 50; self.snap_threshold = 8
         self.horizontal_guides = []; self.vertical_guides = []
         self.guides_enabled = True 
         self.tools = {
@@ -54,6 +54,7 @@ class CanvasWidget(QWidget):
             "rect": RectangleTool(self), "square": SquareTool(self), "circle": CircleTool(self), "ellipse": EllipseTool(self),
             "rounded_rect": RoundedRectangleTool(self), "text": TextTool(self), "polyline": PolylineTool(self), "polygon": PolygonTool(self),
             "pen": PenTool(self), "freehand": FreehandTool(self), "eraser": EraserTool(self), "paint_bucket": PaintBucketTool(self),
+            "bspline": BSplineTool(self), "surface": SurfaceTool(self),  # 🟢 [新增] 注册曲面工具
         }
         self.current_tool_obj = self.tools["select"]
         self.current_raster_algorithm = "PyQt原生"
@@ -232,23 +233,32 @@ class CanvasWidget(QWidget):
     def paintEvent(self, event):
         painter = QPainter(self)
         painter.canvas = self 
-        # 🔴 背景绘制现在由renderer在final_buffer上完成，这里不再需要
-        # painter.fillRect(self.rect(), self.background_color)
-        if self.grid_enabled:
-            self.draw_grid(painter)
-        self.draw_guides(painter)
-        # 🔴 Antialiasing现在由renderer内部根据情况设置
-        # painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        # 🟢 1. 调用渲染器 (绘制背景 + 网格 + 所有图层 + 工具预览)
         CanvasRenderer.paint(painter, self)
 
+        # 🟢 2. 绘制参考线 (Guides)
+        # 放在最后，确保参考线永远覆盖在最上层 (Overlay)
+        self.draw_guides(painter)
     def _draw_arrow(self, painter, p1, p2, color, width):
         CanvasRenderer.draw_arrow(painter, p1, p2, color, width)
 
     # ... (draw_grid, mouse events, key events, context menu, etc., are mostly unchanged) ...
     def draw_grid(self, painter):
-        pen = QPen(QColor(220, 220, 220), 1, Qt.PenStyle.DotLine); painter.setPen(pen); width, height = self.width(), self.height()
-        for x in range(0, width, self.grid_size): painter.drawLine(x, 0, x, height)
-        for y in range(0, height, self.grid_size): painter.drawLine(0, y, width, y)
+        # 🟢 [修改] width=0 (Cosmetic Pen)，确保线永远是极细的 1px
+        # 颜色改为更淡的灰色 (230, 230, 230)，更专业
+        pen = QPen(QColor(230, 230, 230), 0, Qt.PenStyle.SolidLine) 
+        painter.setPen(pen)
+        
+        width, height = self.width(), self.height()
+        for x in range(0, width, self.grid_size): 
+            painter.drawLine(x, 0, x, height)
+        for y in range(0, height, self.grid_size): 
+            painter.drawLine(0, y, width, y)
+    def draw_guides(self, painter):
+        if not self.guides_enabled: return
+        pen = QPen(QColor(0, 150, 255, 150), 1, Qt.PenStyle.DashLine); painter.setPen(pen); width, height = self.width(), self.height()
+        for y in self.horizontal_guides: painter.drawLine(0, y, width, y)
+        for x in self.vertical_guides: painter.drawLine(x, 0, x, height)
     def mousePressEvent(self, event):
         self._finish_text_editing()
         if self.current_tool_obj: self.current_tool_obj.mousePressEvent(event)
@@ -303,14 +313,48 @@ class CanvasWidget(QWidget):
                 menu.addSeparator()
                 fill_color_action = QAction("修改填充颜色", self); fill_color_action.triggered.connect(self.change_selected_fill_color); menu.addAction(fill_color_action)
                 fill_style_menu = menu.addMenu("修改填充方式")
+                # 🟢 新增逻辑：检查当前算法是否为原生
+                is_native = (self.current_raster_algorithm == "PyQt原生")
+
                 if hasattr(main_window, 'fill_styles'):
                     for name, style in main_window.fill_styles.items():
+                        # 🟢 过滤逻辑：如果是自定义算法，且样式不是“无”或“纯色”，则跳过
+                        if not is_native and style not in (Qt.BrushStyle.NoBrush, Qt.BrushStyle.SolidPattern):
+                            continue
+
                         action = QAction(name, self)
                         action.triggered.connect(lambda checked=False, s=style: self.change_selected_fill_style(s))
                         fill_style_menu.addAction(action)
-                        
+                    
+                    # 🟢 提示逻辑：如果是自定义算法，加一个灰色的提示项
+                    if not is_native:
+                        fill_style_menu.addSeparator()
+                        hint_action = QAction("（其他样式需切换至原生引擎）", self)
+                        hint_action.setEnabled(False) # 设为不可点击
+                        fill_style_menu.addAction(hint_action)
+            has_surface = any(isinstance(s, BezierSurface) for s in self.selected_shapes)
+            if has_surface:
+                menu.addSeparator()
+                surface_menu = menu.addMenu("曲面显示设置")
+                
+                # 切换填充
+                action_toggle_fill = QAction("显示曲面填充", self)
+                action_toggle_fill.setCheckable(True)
+                # 检查第一个曲面的状态
+                first_surface = next(s for s in self.selected_shapes if isinstance(s, BezierSurface))
+                action_toggle_fill.setChecked(first_surface.show_fill)
+                action_toggle_fill.triggered.connect(lambda c: self.toggle_surface_property('show_fill', c))
+                surface_menu.addAction(action_toggle_fill)
+                
+                # 切换网格线
+                action_toggle_wire = QAction("显示网格线", self)
+                action_toggle_wire.setCheckable(True)
+                action_toggle_wire.setChecked(first_surface.show_wireframe)
+                action_toggle_wire.triggered.connect(lambda c: self.toggle_surface_property('show_wireframe', c))
+                surface_menu.addAction(action_toggle_wire)            
             menu.exec(event.globalPos())
             self.setFocus()
+            
     def delete_selected(self):
         if self.selected_shapes: shapes_by_layer = {};
         for shape in self.selected_shapes: layer = self._get_layer_for_shape(shape);
@@ -343,11 +387,32 @@ class CanvasWidget(QWidget):
         if fillable_shapes: initial = next((s.fill_color for s in fillable_shapes if s.fill_color), Qt.GlobalColor.white); color = QColorDialog.getColor(initial, self, "选择填充颜色");
         if color.isValid(): props = {'fill_color': color, 'fill_style': Qt.BrushStyle.SolidPattern}; self.execute_command(ChangePropertiesCommand(fillable_shapes, props))
     def change_selected_fill_style(self, style):
-        fillable_shapes = [s for s in self.selected_shapes if hasattr(s, 'fill_color')];
-        if fillable_shapes: props = {'fill_style': style};
-        if style == Qt.BrushStyle.NoBrush: props['fill_color'] = None
-        else: current_color = next((s.fill_color for s in fillable_shapes if s.fill_color), None)
-        if not current_color: props['fill_color'] = QColor(0, 0, 0)
+        fillable_shapes = [s for s in self.selected_shapes if hasattr(s, 'fill_color')]
+        if not fillable_shapes:
+            return
+
+        props = {'fill_style': style}
+
+        if style == Qt.BrushStyle.NoBrush:
+            props['fill_color'] = None
+        else:
+            # 1. 尝试获取图形原本的填充色 (过滤掉 None)
+            current_color = next((s.fill_color for s in fillable_shapes if s.fill_color and s.fill_color.isValid()), None)
+            
+            if not current_color:
+                # 2. 如果图形原本没颜色（是透明的），则优先使用当前工具栏设置的全局填充色
+                if self.current_fill_color and self.current_fill_color.isValid():
+                    current_color = self.current_fill_color
+                # 3. 如果工具栏也没设置颜色，则使用该图形的边框颜色 (这样最自然)
+                elif fillable_shapes[0].color and fillable_shapes[0].color.isValid():
+                    current_color = fillable_shapes[0].color
+                # 4. 实在没办法了，才用黑色兜底
+                else:
+                    current_color = QColor(0, 0, 0)
+            
+            # 将确定好的颜色设置进去
+            props['fill_color'] = current_color
+        
         self.execute_command(ChangePropertiesCommand(fillable_shapes, props))
     def change_selected_font(self):
         text_shapes = [s for s in self.selected_shapes if isinstance(s, Text)];
@@ -424,10 +489,15 @@ class CanvasWidget(QWidget):
             if shape_to_find in layer.shapes or (isinstance(shape_to_find, ShapeGroup) and shape_to_find in layer.shapes): return layer
         return None
     def _get_shape_at(self, pos):
+        # 🟢 [修改] 将整数 pos 转换为浮点 posF，以匹配 QRectF
+        posF = QPointF(pos)
+        
         for layer in self.layers:
             if not layer.is_visible: continue
             for shape in reversed(layer.shapes):
-                if shape.get_transformed_bounding_box().contains(pos): return shape, layer
+                # 现在传入 posF (QPointF) 就不会报错了
+                if shape.get_transformed_bounding_box().contains(posF): 
+                    return shape, layer
         return None, None
     def copy_selected(self):
         if self.selected_shapes: self.clipboard = [shape.clone() for shape in self.selected_shapes]; self.clipboard_changed_signal.emit(True)
@@ -470,11 +540,7 @@ class CanvasWidget(QWidget):
         if y not in self.horizontal_guides: self.horizontal_guides.append(y); self.update()
     def add_vertical_guide(self, x):
         if x not in self.vertical_guides: self.vertical_guides.append(x); self.update()
-    def draw_guides(self, painter):
-        if not self.guides_enabled: return
-        pen = QPen(QColor(0, 150, 255, 150), 1, Qt.PenStyle.DashLine); painter.setPen(pen); width, height = self.width(), self.height()
-        for y in self.horizontal_guides: painter.drawLine(0, y, width, y)
-        for x in self.vertical_guides: painter.drawLine(x, 0, x, height)
+    
     def set_background_color(self, color):
         if color.isValid(): self.background_color = color; self.update()
     def preview_layer_opacity(self, index, value):
@@ -492,3 +558,18 @@ class CanvasWidget(QWidget):
         for layer in self.layers:
             layer.is_dirty = True
         self.update()
+    # 🟢 [满分写法] 使用 Command 模式，支持 Ctrl+Z 撤销
+    def toggle_surface_property(self, prop_name, value):
+        # 1. 筛选出选中的曲面
+        surfaces = [s for s in self.selected_shapes if isinstance(s, BezierSurface)]
+        if not surfaces:
+            return
+
+        # 2. 构造属性变更字典
+        # 例如: {'show_fill': False}
+        new_props = {prop_name: value}
+
+        # 3. 创建并执行命令
+        # ChangePropertiesCommand 会自动处理旧值的备份、图层的脏标记以及 Undo/Redo 逻辑
+        command = ChangePropertiesCommand(surfaces, new_props)
+        self.execute_command(command)
